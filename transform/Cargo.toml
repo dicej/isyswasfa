@@ -1,0 +1,8 @@
+[package]
+name = "isyswasfa-transform"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indexmap = "2.1.0"
+wit-parser = "0.13.1"

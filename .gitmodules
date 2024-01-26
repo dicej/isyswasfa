@@ -1,0 +1,6 @@
+[submodule "wit-bindgen"]
+	path = wit-bindgen
+	url = https://github.com/dicej/wit-bindgen
+[submodule "wasmtime"]
+	path = wasmtime
+	url = https://github.com/dicej/wasmtime

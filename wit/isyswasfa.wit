@@ -1,0 +1,58 @@
+package isyswasfa:isyswasfa;
+
+interface isyswasfa {
+  type state = u32;
+
+  resource pending;
+  resource cancel;
+  resource ready {
+    state: func() -> state;
+  }
+
+  record poll-input-listening {
+    state: state,
+    cancel: cancel
+  }
+
+  record poll-input-ready {
+    state: state,
+    ready: ready
+  }
+
+  record poll-input-cancel {
+    state: state,
+    cancel: cancel
+  }
+
+  variant poll-input {
+    listening(poll-input-listening),
+    ready(poll-input-ready),
+    cancel(poll-input-cancel),
+    cancel-complete(state)
+  }
+
+  record poll-output-ready {
+    state: state,
+    ready: ready
+  }
+
+  record poll-output-listen {
+    state: state,
+    pending: pending
+  }
+
+  record poll-output-pending {
+    state: state,
+    cancel: cancel
+  }
+
+  variant poll-output {
+    ready(poll-output-ready),
+    listen(poll-output-listen),
+    pending(poll-output-pending),
+    cancel(cancel),
+    cancel-complete(cancel)
+  }
+
+  make-task: func() -> tuple<pending, cancel, ready>;
+}
