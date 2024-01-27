@@ -1,6 +1,20 @@
 wasmtime::component::bindgen!({
-    path: "../../wit",
-    inline: "import isyswasfa:isyswasfa/isyswasfa;",
+    path: "../wit",
+    interfaces: "
+        use isyswasfa:isyswasfa/isyswasfa.{poll-input, poll-output};
+
+        import isyswasfa:isyswasfa/isyswasfa;
+
+        export dummy: func(input: poll-input) -> poll-output;                
+    ",
+    async: {
+        only_imports: []
+    },
+    with: {
+        "isyswasfa:isyswasfa/isyswasfa/ready": Task,
+        "isyswasfa:isyswasfa/isyswasfa/pending": Task,
+        "isyswasfa:isyswasfa/isyswasfa/cancel": Task,
+    }
 });
 
 use {
@@ -29,6 +43,8 @@ use {
         StoreContextMut,
     },
 };
+
+pub use isyswasfa::isyswasfa::isyswasfa as interface;
 
 fn dummy_waker() -> Waker {
     struct DummyWaker;

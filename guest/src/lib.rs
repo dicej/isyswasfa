@@ -1,8 +1,28 @@
 mod bindings {
     wit_bindgen::generate!({
         path: "../wit",
-        inline: "package foo:foo; world foo { import isyswasfa:isyswasfa/isyswasfa; }",
+        inline: "
+            package foo:foo;
+            world foo {
+                use isyswasfa:isyswasfa/isyswasfa.{poll-input, poll-output};
+
+                import isyswasfa:isyswasfa/isyswasfa;
+
+                export dummy: func(input: poll-input) -> poll-output;
+            }
+        ",
+        exports: {
+            world: World
+        }
     });
+
+    struct World;
+
+    impl Guest for World {
+        fn dummy(_input: PollInput) -> PollOutput {
+            unreachable!()
+        }
+    }
 }
 
 use {
