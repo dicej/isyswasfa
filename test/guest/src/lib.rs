@@ -1,39 +1,26 @@
 mod bindings {
     wit_bindgen::generate!({
         path: "wit",
-        isywasfa: "-guest",
+        isyswasfa: "-guest",
         exports: {
-            world: World
+            "component:guest/baz": super::Component
         }
     });
-
-    struct World;
-
-    impl Guest for World {
-        fn dummy(_input: PollInput) -> PollOutput {
-            unreachable!()
-        }
-    }
 }
 
 use {
     async_trait::async_trait,
-    bindings::{
-        exports::component::guest::original_interface_async::Guest as OriginalInterfaceAsync,
-        isyswasfa::isyswasfa::isyswasfa::{Pending, PollInput, PollOutput, Ready},
-        Guest,
-    },
+    bindings::{component::guest::baz, exports::component::guest::baz::Guest as Baz},
 };
 
 struct Component;
 
 #[async_trait(?Send)]
-impl GuestAsync for ComponentAsync {
+impl Baz for Component {
     async fn foo(s: String) -> String {
         format!(
             "{} - exited guest",
-            isyswasfa_bindings::original_interface_async::foo(&format!("{s} - entered guest"))
-                .await
+            baz::foo(&format!("{s} - entered guest")).await
         )
     }
 }

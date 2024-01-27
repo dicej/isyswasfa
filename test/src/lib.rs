@@ -14,17 +14,9 @@ mod test {
         wit_component::ComponentEncoder,
     };
 
-    use isyswasfa_host::interface;
-
     wasmtime::component::bindgen!({
         path: "guest/wit",
         isyswasfa: true,
-        async: {
-            only_imports: []
-        },
-        with: {
-            "isyswasfa:isyswasfa/isyswasfa": crate::test::interface,
-        }
     });
 
     async fn build_component(src_path: &str, name: &str) -> Result<Vec<u8>> {
@@ -34,7 +26,7 @@ mod test {
             let adapter_url = "https://github.com/bytecodealliance/wasmtime/releases\
                                /download/v17.0.0/wasi_snapshot_preview1.reactor.wasm";
 
-            let adapter_path = "../target/wasi_snapshot_preview1.reactor.wasm";
+            let adapter_path = &format!("{src_path}/target/wasi_snapshot_preview1.reactor.wasm");
 
             if !fs::try_exists(adapter_path).await? {
                 fs::write(
@@ -55,7 +47,9 @@ mod test {
         {
             Ok(ComponentEncoder::default()
                 .validate(true)
-                .module(&fs::read(format!("../target/wasm32-wasi/debug/{name}.wasm")).await?)?
+                .module(
+                    &fs::read(format!("{src_path}/target/wasm32-wasi/debug/{name}.wasm")).await?,
+                )?
                 .adapter("wasi_snapshot_preview1", &fs::read(adapter_path).await?)?
                 .encode()?)
         } else {
@@ -91,7 +85,7 @@ mod test {
         #[async_trait]
         impl component::guest::baz::Host for Ctx {
             async fn foo(_state: (), s: String) -> wasmtime::Result<String> {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
                 Ok(format!("{s} - entered host - exited host"))
             }
         }
@@ -109,6 +103,7 @@ mod test {
         let mut linker = Linker::new(&engine);
 
         command::add_to_linker(&mut linker)?;
+        isyswasfa_host::add_to_linker(&mut linker)?;
 
         Bar::add_to_linker(&mut linker, |ctx| ctx)?;
 
@@ -128,8 +123,6 @@ mod test {
             .component_guest_baz()
             .call_foo(&mut store, "hello, world!")
             .await?;
-
-        println!("result is: {value}");
 
         assert_eq!(
             "hello, world! - entered guest - entered host - exited host - exited guest",

@@ -191,7 +191,7 @@ pub fn transform(
         });
 
         Function {
-            name: format!("isyswasfa-poll-{poll_suffix}"),
+            name: format!("isyswasfa-poll{poll_suffix}"),
             kind: FunctionKind::Freestanding,
             params: vec![("input".to_owned(), Type::Id(list_poll_input))],
             results: Results::Anon(Type::Id(list_poll_output)),

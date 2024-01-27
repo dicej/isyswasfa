@@ -47,6 +47,8 @@ use {
     },
 };
 
+pub use bindings::isyswasfa::isyswasfa::isyswasfa as interface;
+
 fn dummy_waker() -> Waker {
     struct DummyWaker;
 

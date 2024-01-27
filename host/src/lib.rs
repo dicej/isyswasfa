@@ -39,12 +39,16 @@ use {
     },
     wasmparser::{ComponentExternalKind, Parser, Payload},
     wasmtime::{
-        component::{Instance, Resource, ResourceTable, TypedFunc},
+        component::{Instance, Linker, Resource, ResourceTable, TypedFunc},
         StoreContextMut,
     },
 };
 
 pub use isyswasfa::isyswasfa::isyswasfa as interface;
+
+pub fn add_to_linker<T: IsyswasfaView + Send>(linker: &mut Linker<T>) -> wasmtime::Result<()> {
+    isyswasfa::isyswasfa::isyswasfa::add_to_linker(linker, |ctx| ctx)
+}
 
 fn dummy_waker() -> Waker {
     struct DummyWaker;
