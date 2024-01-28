@@ -904,6 +904,7 @@ dependencies = [
  "once_cell",
  "wasmparser 0.120.0",
  "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

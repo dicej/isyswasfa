@@ -4,6 +4,7 @@ wasmtime::component::bindgen!({
         use isyswasfa:isyswasfa/isyswasfa.{poll-input, poll-output};
 
         import isyswasfa:isyswasfa/isyswasfa;
+        import isyswasfa:isyswasfa/poll;
 
         export dummy: func(input: poll-input) -> poll-output;                
     ",
@@ -11,6 +12,7 @@ wasmtime::component::bindgen!({
         only_imports: []
     },
     with: {
+        "wasi:io/poll/pollable": Pollable,
         "isyswasfa:isyswasfa/isyswasfa/ready": Task,
         "isyswasfa:isyswasfa/isyswasfa/pending": Task,
         "isyswasfa:isyswasfa/isyswasfa/cancel": Task,
@@ -24,14 +26,18 @@ use {
         future::{self, Either, FutureExt, Select},
         stream::{FuturesUnordered, ReadyChunks, StreamExt},
     },
-    isyswasfa::isyswasfa::isyswasfa::{
-        Host, HostCancel, HostPending, HostReady, PollInput, PollInputCancel, PollInputListening,
-        PollInputReady, PollOutput, PollOutputListen, PollOutputPending, PollOutputReady,
+    isyswasfa::isyswasfa::{
+        isyswasfa::{
+            Host as IsyswasfaHost, HostCancel, HostPending, HostReady, PollInput, PollInputCancel,
+            PollInputListening, PollInputReady, PollOutput, PollOutputListen, PollOutputPending,
+            PollOutputReady,
+        },
+        poll::Host as PollHost,
     },
     once_cell::sync::Lazy,
     std::{
         any::Any,
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         future::Future,
         pin::Pin,
         sync::Arc,
@@ -42,11 +48,14 @@ use {
         component::{Instance, Linker, Resource, ResourceTable, TypedFunc},
         StoreContextMut,
     },
+    wasmtime_wasi::preview2::{MakeFuture, WasiView},
 };
 
-pub use isyswasfa::isyswasfa::isyswasfa as interface;
+pub use {isyswasfa::isyswasfa::isyswasfa as interface, wasmtime_wasi::preview2::Pollable};
 
-pub fn add_to_linker<T: IsyswasfaView + Send>(linker: &mut Linker<T>) -> wasmtime::Result<()> {
+pub fn add_to_linker<T: WasiView + IsyswasfaView + Send>(
+    linker: &mut Linker<T>,
+) -> wasmtime::Result<()> {
     isyswasfa::isyswasfa::isyswasfa::add_to_linker(linker, |ctx| ctx)
 }
 
@@ -85,6 +94,11 @@ pub enum TaskState {
     HostReady(Option<Box<dyn Any + Send>>),
     GuestPending(GuestPending),
     GuestReady(u32),
+    PollablePending {
+        stream: u32,
+        make_future: MakeFuture,
+    },
+    PollableReady,
 }
 
 type PollFunc = TypedFunc<(Vec<PollInput>,), (Vec<PollOutput>,)>;
@@ -92,6 +106,7 @@ type PollFunc = TypedFunc<(Vec<PollInput>,), (Vec<PollOutput>,)>;
 pub struct IsyswasfaCtx {
     table: ResourceTable,
     futures: ReadyChunks<FuturesUnordered<Select<oneshot::Receiver<()>, BoxFuture>>>,
+    pollables: HashSet<u32>,
     polls: Vec<PollFunc>,
 }
 
@@ -106,6 +121,7 @@ impl IsyswasfaCtx {
         Self {
             table: ResourceTable::new(),
             futures: FuturesUnordered::new().ready_chunks(1024),
+            pollables: HashSet::new(),
             polls: Vec::new(),
         }
     }
@@ -319,18 +335,20 @@ where
                         task.listen = Some(StatePoll { state, poll: index });
 
                         match task.state {
-                            TaskState::HostPending(_) => input.entry(index).or_default().push(
-                                PollInput::Listening(PollInputListening {
+                            TaskState::HostPending(_) | TaskState::PollablePending { .. } => input
+                                .entry(index)
+                                .or_default()
+                                .push(PollInput::Listening(PollInputListening {
                                     state,
                                     cancel: pending,
-                                }),
-                            ),
-                            TaskState::HostReady(_) => input.entry(index).or_default().push(
-                                PollInput::Ready(PollInputReady {
+                                })),
+                            TaskState::HostReady(_) | TaskState::PollableReady => input
+                                .entry(index)
+                                .or_default()
+                                .push(PollInput::Ready(PollInputReady {
                                     state,
                                     ready: pending,
-                                }),
-                            ),
+                                })),
                             TaskState::GuestPending(GuestPending { on_cancel: Some(_) }) => {
                                 input.entry(index).or_default().push(PollInput::Listening(
                                     PollInputListening {
@@ -424,17 +442,69 @@ where
                 drop(&mut store.as_context_mut(), pending)?;
 
                 break Ok(ready);
-            } else if let Some(values) = isyswasfa(&mut store.as_context_mut()).futures.next().await
-            {
-                for value in values {
-                    match value {
-                        Either::Left(_) => {}
-                        Either::Right(((task_rep, result), _)) => {
-                            let ready = Resource::new_own(task_rep);
-                            let context = &mut store.as_context_mut();
-                            let task = task(context, &ready)?;
+            } else {
+                let context = &mut store.as_context_mut();
+                let state = context.data_mut().isyswasfa();
+                let ready = {
+                    let pollables = state
+                        .pollables
+                        .iter()
+                        .map(|&index| {
+                            if let Task {
+                                state:
+                                    TaskState::PollablePending {
+                                        stream,
+                                        make_future,
+                                    },
+                                ..
+                            } = state.table.get(&Resource::<Task>::new_own(index))?
+                            {
+                                Ok((*stream, (*make_future, index)))
+                            } else {
+                                unreachable!()
+                            }
+                        })
+                        .collect::<wasmtime::Result<HashMap<_, _>>>()?;
+
+                    let mut futures = state
+                        .table
+                        .iter_entries(pollables)
+                        .map(|(entry, (make_future, index))| Ok((make_future(entry?), index)))
+                        .collect::<wasmtime::Result<Vec<_>>>()?;
+
+                    let ready = future::poll_fn(move |cx| {
+                        let mut any_ready = false;
+                        let mut results = Vec::new();
+                        for (fut, index) in futures.iter_mut() {
+                            match fut.as_mut().poll(cx) {
+                                Poll::Ready(()) => {
+                                    results.push(*index);
+                                    any_ready = true;
+                                }
+                                Poll::Pending => {}
+                            }
+                        }
+                        if any_ready {
+                            Poll::Ready(results)
+                        } else {
+                            Poll::Pending
+                        }
+                    });
+
+                    match future::select(ready, state.futures.next()).await {
+                        Either::Left((pollables, _)) => Either::Left(pollables),
+                        Either::Right((values, _)) => Either::Right(values),
+                    }
+                };
+
+                match ready {
+                    Either::Left(pollables) => {
+                        for index in pollables {
+                            let ready = Resource::<Task>::new_own(index);
+                            let task = state.table.get_mut(&ready)?;
                             task.reference_count += 1;
-                            task.state = TaskState::HostReady(Some(result));
+                            task.state = TaskState::PollableReady;
+                            state.pollables.remove(&index);
 
                             if let Some(listen) = task.listen {
                                 input.entry(listen.poll).or_default().push(PollInput::Ready(
@@ -446,9 +516,34 @@ where
                             }
                         }
                     }
-                }
-            } else {
-                bail!("guest task is pending with no pending host tasks");
+                    Either::Right(values) => {
+                        if let Some(values) = values {
+                            for value in values {
+                                match value {
+                                    Either::Left(_) => {}
+                                    Either::Right(((task_rep, result), _)) => {
+                                        let ready = Resource::new_own(task_rep);
+                                        let context = &mut store.as_context_mut();
+                                        let task = task(context, &ready)?;
+                                        task.reference_count += 1;
+                                        task.state = TaskState::HostReady(Some(result));
+
+                                        if let Some(listen) = task.listen {
+                                            input.entry(listen.poll).or_default().push(
+                                                PollInput::Ready(PollInputReady {
+                                                    state: listen.state,
+                                                    ready,
+                                                }),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        } else if state.pollables.is_empty() {
+                            bail!("guest task is pending with no pending host tasks");
+                        }
+                    }
+                };
             }
         }
     }
@@ -483,8 +578,48 @@ impl<T: IsyswasfaView> HostReady for T {
     }
 }
 
-impl<T: IsyswasfaView> Host for T {
+impl<T: IsyswasfaView> IsyswasfaHost for T {
     fn make_task(&mut self) -> wasmtime::Result<(Resource<Task>, Resource<Task>, Resource<Task>)> {
         self.isyswasfa().guest_pending()
+    }
+}
+
+impl<T: IsyswasfaView> PollHost for T {
+    fn block_isyswasfa(
+        &mut self,
+        this: Resource<Pollable>,
+    ) -> wasmtime::Result<Result<(), Resource<Task>>> {
+        let cx = self.isyswasfa();
+        let pollable = cx.table.get(&this)?;
+        let index = pollable.index;
+        let make_future = pollable.make_future;
+        {
+            let mut ready = (make_future)(cx.table.get_any_mut(index)?);
+            match ready
+                .as_mut()
+                .poll(&mut Context::from_waker(&dummy_waker()))
+            {
+                Poll::Ready(_) => return Ok(Ok(())),
+                Poll::Pending => {}
+            }
+        }
+
+        let task = cx.table.push_child(
+            Task {
+                reference_count: 1,
+                state: TaskState::PollablePending {
+                    stream: index,
+                    make_future,
+                },
+                listen: None,
+            },
+            &Resource::<()>::new_own(index),
+        )?;
+        cx.pollables.insert(task.rep());
+        Ok(Err(task))
+    }
+
+    fn block_isyswasfa_result(&mut self, ready: Resource<Task>) -> wasmtime::Result<()> {
+        self.isyswasfa().get_ready(ready)
     }
 }

@@ -15,7 +15,7 @@ mod test {
     };
 
     wasmtime::component::bindgen!({
-        path: "guest/wit",
+        path: "wit",
         isyswasfa: true,
     });
 
@@ -57,39 +57,39 @@ mod test {
         }
     }
 
+    struct Ctx {
+        wasi: WasiCtx,
+        isyswasfa: IsyswasfaCtx,
+    }
+
+    impl WasiView for Ctx {
+        fn table(&mut self) -> &mut ResourceTable {
+            self.isyswasfa.table()
+        }
+        fn ctx(&mut self) -> &mut WasiCtx {
+            &mut self.wasi
+        }
+    }
+
+    impl IsyswasfaView for Ctx {
+        type State = ();
+
+        fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
+            &mut self.isyswasfa
+        }
+        fn state(&self) -> Self::State {}
+    }
+
+    #[async_trait]
+    impl component::guest::baz::Host for Ctx {
+        async fn foo(_state: (), s: String) -> wasmtime::Result<String> {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(format!("{s} - entered host - exited host"))
+        }
+    }
+
     #[tokio::test]
     async fn round_trip() -> Result<()> {
-        struct Ctx {
-            wasi: WasiCtx,
-            isyswasfa: IsyswasfaCtx,
-        }
-
-        impl WasiView for Ctx {
-            fn table(&mut self) -> &mut ResourceTable {
-                self.isyswasfa.table()
-            }
-            fn ctx(&mut self) -> &mut WasiCtx {
-                &mut self.wasi
-            }
-        }
-
-        impl IsyswasfaView for Ctx {
-            type State = ();
-
-            fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
-                &mut self.isyswasfa
-            }
-            fn state(&self) -> Self::State {}
-        }
-
-        #[async_trait]
-        impl component::guest::baz::Host for Ctx {
-            async fn foo(_state: (), s: String) -> wasmtime::Result<String> {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(format!("{s} - entered host - exited host"))
-            }
-        }
-
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);

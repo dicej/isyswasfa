@@ -1,0 +1,10 @@
+package component:guest;
+
+interface baz {
+    foo: func(s: string) -> string;
+}
+
+world bar {
+    import baz;
+    export baz;
+}

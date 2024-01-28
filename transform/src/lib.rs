@@ -55,17 +55,25 @@ impl<'a> Asyncify<'a> {
                     WorldKey::Interface(_) => unreachable!(),
                 };
 
-                let (a, b) = if let Some(new) = self.functions.get(key).cloned() {
-                    new
+                let new = if let Some(new) = self.functions.get(key).cloned() {
+                    Some(new)
                 } else {
-                    let new = self.asyncify_function(old);
-                    self.functions.insert(key.clone(), new.clone());
-                    new
+                    if let Some(new) = self.asyncify_function(old) {
+                        self.functions.insert(key.clone(), new.clone());
+                        Some(new)
+                    } else {
+                        None
+                    }
                 };
-                vec![
-                    (new_key("-isyswasfa"), WorldItem::Function(a)),
-                    (new_key("-isyswasfa-result"), WorldItem::Function(b)),
-                ]
+
+                if let Some((a, b)) = new {
+                    vec![
+                        (new_key("-isyswasfa"), WorldItem::Function(a)),
+                        (new_key("-isyswasfa-result"), WorldItem::Function(b)),
+                    ]
+                } else {
+                    vec![(key.clone(), item.clone())]
+                }
             }
             WorldItem::Type(old) => vec![(new_key(), WorldItem::Type(*old))],
         }
@@ -76,9 +84,12 @@ impl<'a> Asyncify<'a> {
         let functions = old
             .functions
             .iter()
-            .flat_map(|(_, function)| {
-                let (a, b) = self.asyncify_function(function);
-                [(a.name.clone(), a), (b.name.clone(), b)]
+            .flat_map(|(name, function)| {
+                if let Some((a, b)) = self.asyncify_function(function) {
+                    vec![(a.name.clone(), a), (b.name.clone(), b)]
+                } else {
+                    vec![(name.clone(), function.clone())]
+                }
             })
             .collect();
 
@@ -91,38 +102,49 @@ impl<'a> Asyncify<'a> {
         })
     }
 
-    fn asyncify_function(&mut self, function: &Function) -> (Function, Function) {
-        (
-            Function {
-                name: format!("{}-isyswasfa", function.name),
-                kind: function.kind.clone(),
-                params: function.params.clone(),
-                results: match &function.results {
-                    Results::Anon(ty) => {
-                        Results::Anon(Type::Id(self.new_resolve.types.alloc(TypeDef {
-                            name: None,
-                            kind: TypeDefKind::Result(Result_ {
-                                ok: Some(*ty),
-                                err: Some(Type::Id(self.pending)),
-                            }),
-                            owner: TypeOwner::None,
-                            docs: Docs::default(),
-                        })))
-                    }
-                    Results::Named(_) => {
-                        todo!("handle functions returning multiple named results")
-                    }
-                },
-                docs: function.docs.clone(),
-            },
-            Function {
-                name: format!("{}-isyswasfa-result", function.name),
-                kind: function.kind.clone(),
-                params: vec![("ready".into(), Type::Id(self.ready))],
-                results: function.results.clone(),
-                docs: function.docs.clone(),
-            },
-        )
+    fn asyncify_function(&mut self, function: &Function) -> Option<(Function, Function)> {
+        match &function.kind {
+            FunctionKind::Constructor(_) => None,
+            FunctionKind::Freestanding | FunctionKind::Static(_) | FunctionKind::Method(_) => {
+                Some((
+                    Function {
+                        name: format!("{}-isyswasfa", function.name),
+                        kind: function.kind.clone(),
+                        params: function.params.clone(),
+                        results: match &function.results {
+                            Results::Anon(ty) => {
+                                Results::Anon(Type::Id(self.new_resolve.types.alloc(TypeDef {
+                                    name: None,
+                                    kind: TypeDefKind::Result(Result_ {
+                                        ok: Some(*ty),
+                                        err: Some(Type::Id(self.pending)),
+                                    }),
+                                    owner: TypeOwner::None,
+                                    docs: Docs::default(),
+                                })))
+                            }
+                            Results::Named(_) => {
+                                todo!("handle functions returning multiple named results")
+                            }
+                        },
+                        docs: function.docs.clone(),
+                    },
+                    Function {
+                        name: format!("{}-isyswasfa-result", function.name),
+                        kind: match &function.kind {
+                            FunctionKind::Freestanding | FunctionKind::Static(_) => {
+                                function.kind.clone()
+                            }
+                            FunctionKind::Method(id) => FunctionKind::Static(*id),
+                            FunctionKind::Constructor(_) => unreachable!(),
+                        },
+                        params: vec![("ready".into(), Type::Id(self.ready))],
+                        results: function.results.clone(),
+                        docs: function.docs.clone(),
+                    },
+                ))
+            }
+        }
     }
 }
 
@@ -139,7 +161,7 @@ pub fn transform(
         .push(
             UnresolvedPackage::parse(
                 &Path::new("isyswasfa.wit"),
-                include_str!("../../wit/isyswasfa.wit"),
+                include_str!("../../wit/deps/isyswasfa/isyswasfa.wit"),
             )
             .unwrap(),
         )
