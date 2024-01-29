@@ -53,7 +53,12 @@ use {
     wasmtime_wasi::preview2::{MakeFuture, WasiView},
 };
 
-pub use {isyswasfa::isyswasfa::isyswasfa as interface, wasmtime_wasi::preview2::Pollable};
+pub use {
+    isyswasfa::{
+        io::poll as isyswasfa_poll_interface, isyswasfa::isyswasfa as isyswasfa_interface,
+    },
+    wasmtime_wasi::preview2::{bindings::wasi::io::poll as wasi_poll_interface, Pollable},
+};
 
 pub fn add_to_linker<T: WasiView + IsyswasfaView + Send>(
     linker: &mut Linker<T>,

@@ -53,7 +53,7 @@ impl<'a> Asyncify<'a> {
         let old = &self.old_resolve.interfaces[interface];
 
         // TODO: make interface and function include/exclude lists configurable
-        if let Some("wasi") = old
+        if let Some("wasi" | "isyswasfa") = old
             .package
             .map(|p| self.old_resolve.packages[p].name.namespace.as_str())
         {
@@ -149,6 +149,40 @@ fn transform_new(resolve: &Resolve, world: WorldId, poll_suffix: Option<&str>) -
 
     let isyswasfa_interface = new_resolve.packages[isyswasfa_package].interfaces["isyswasfa"];
 
+    let is_wasi_io_poll = |id| {
+        let interface = &resolve.interfaces[id];
+        matches!(
+            (
+                interface.package.map(|pid| {
+                    let package = &resolve.packages[pid].name;
+                    (package.namespace.as_str(), package.name.as_str())
+                }),
+                interface.name.as_deref(),
+            ),
+            (Some(("wasi", "io")), Some("poll"))
+        )
+    };
+
+    let poll_interface = if old_world
+        .imports
+        .keys()
+        .any(|key| matches!(key, WorldKey::Interface(id) if is_wasi_io_poll(*id)))
+    {
+        let io_package = new_resolve
+            .push(
+                UnresolvedPackage::parse(
+                    &Path::new("poll.wit"),
+                    include_str!("../../wit/deps/isyswasfa-io/poll.wit"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        Some(new_resolve.packages[io_package].interfaces["poll"])
+    } else {
+        None
+    };
+
     let pending = new_resolve.interfaces[isyswasfa_interface].types["pending"];
     let pending = new_resolve.types.alloc(TypeDef {
         name: None,
@@ -208,6 +242,7 @@ fn transform_new(resolve: &Resolve, world: WorldId, poll_suffix: Option<&str>) -
             .iter()
             .flat_map(|(key, item)| asyncify.asyncify_world_item(key, item)),
     )
+    .chain(poll_interface.map(|id| (WorldKey::Interface(id), WorldItem::Interface(id))))
     .collect();
 
     let exports = old_world

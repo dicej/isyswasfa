@@ -9,6 +9,7 @@ mod bindings {
                 use isyswasfa:isyswasfa/isyswasfa.{poll-input, poll-output};
 
                 import isyswasfa:isyswasfa/isyswasfa;
+                import isyswasfa:io/poll;
 
                 export dummy: func(input: poll-input) -> poll-output;
             }
@@ -28,9 +29,16 @@ mod bindings {
 }
 
 use {
-    bindings::isyswasfa::isyswasfa::isyswasfa::{
-        self, Cancel, Pending, PollInput, PollInputCancel, PollInputListening, PollInputReady,
-        PollOutput, PollOutputListen, PollOutputPending, PollOutputReady, Ready,
+    bindings::{
+        isyswasfa::{
+            io::poll,
+            isyswasfa::isyswasfa::{
+                self, Cancel, Pending, PollInput, PollInputCancel, PollInputListening,
+                PollInputReady, PollOutput, PollOutputListen, PollOutputPending, PollOutputReady,
+                Ready,
+            },
+        },
+        wasi::io::poll::Pollable,
     },
     by_address::ByAddress,
     futures::{channel::oneshot, future::FutureExt},
@@ -40,6 +48,7 @@ use {
         cell::RefCell,
         collections::HashMap,
         future::Future,
+        future::IntoFuture,
         mem,
         ops::{Deref, DerefMut},
         pin::Pin,
@@ -49,7 +58,9 @@ use {
     },
 };
 
-pub use bindings::isyswasfa::isyswasfa::isyswasfa as interface;
+pub use bindings::{
+    isyswasfa::isyswasfa::isyswasfa as isyswasfa_interface, wasi::io::poll as poll_interface,
+};
 
 fn dummy_waker() -> Waker {
     struct DummyWaker;
@@ -317,4 +328,21 @@ pub async fn await_ready(pending: Pending) -> Ready {
     });
     let _cancel_on_drop = CancelOnDrop(cancel_state);
     rx.await.unwrap()
+}
+
+impl IntoFuture for Pollable {
+    type Output = ();
+    // TODO: use a custom future here to avoid the overhead of boxing
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + 'static>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let v = poll::block_isyswasfa(&self);
+        Box::pin(async move {
+            let _self = self;
+            match v {
+                Ok(()) => (),
+                Err(pending) => poll::block_isyswasfa_result(await_ready(pending).await),
+            }
+        })
+    }
 }

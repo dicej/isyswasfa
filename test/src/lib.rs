@@ -15,8 +15,11 @@ mod test {
     };
 
     wasmtime::component::bindgen!({
-        path: "wit",
+        path: "guest/wit",
         isyswasfa: true,
+        with: {
+            "wasi:clocks/monotonic-clock": wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock,
+        }
     });
 
     async fn build_component(src_path: &str, name: &str) -> Result<Vec<u8>> {
