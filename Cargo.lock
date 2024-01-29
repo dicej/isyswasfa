@@ -902,6 +902,7 @@ dependencies = [
  "anyhow",
  "futures",
  "once_cell",
+ "tracing",
  "wasmparser 0.120.0",
  "wasmtime",
  "wasmtime-wasi",

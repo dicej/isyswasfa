@@ -5,6 +5,7 @@ interface baz {
 }
 
 world bar {
+    import wasi:clocks/monotonic-clock@0.2.0;
     import isyswasfa:io/poll;
     import baz;
     export baz;

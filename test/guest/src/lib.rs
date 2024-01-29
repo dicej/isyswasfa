@@ -10,7 +10,10 @@ mod bindings {
 
 use {
     async_trait::async_trait,
-    bindings::{component::guest::baz, exports::component::guest::baz::Guest as Baz},
+    bindings::{
+        component::guest::baz, exports::component::guest::baz::Guest as Baz, isyswasfa::io::poll,
+        wasi::clocks::monotonic_clock,
+    },
 };
 
 struct Component;
@@ -18,6 +21,8 @@ struct Component;
 #[async_trait(?Send)]
 impl Baz for Component {
     async fn foo(s: String) -> String {
+        poll::block(&monotonic_clock::subscribe_duration(10_000_000)).await;
+
         format!(
             "{} - exited guest",
             baz::foo(&format!("{s} - entered guest")).await

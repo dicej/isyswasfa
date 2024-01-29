@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 wasmtime::component::bindgen!({
     path: "../wit",
     interfaces: "
@@ -56,7 +58,8 @@ pub use {isyswasfa::isyswasfa::isyswasfa as interface, wasmtime_wasi::preview2::
 pub fn add_to_linker<T: WasiView + IsyswasfaView + Send>(
     linker: &mut Linker<T>,
 ) -> wasmtime::Result<()> {
-    isyswasfa::isyswasfa::isyswasfa::add_to_linker(linker, |ctx| ctx)
+    isyswasfa::isyswasfa::isyswasfa::add_to_linker(linker, |ctx| ctx)?;
+    isyswasfa::io::poll::add_to_linker(linker, |ctx| ctx)
 }
 
 fn dummy_waker() -> Waker {
@@ -98,7 +101,6 @@ pub enum TaskState {
         stream: u32,
         make_future: MakeFuture,
     },
-    PollableReady,
 }
 
 type PollFunc = TypedFunc<(Vec<PollInput>,), (Vec<PollOutput>,)>;
@@ -201,6 +203,123 @@ impl IsyswasfaCtx {
 
         value
     }
+
+    async fn wait(&mut self, input: &mut HashMap<usize, Vec<PollInput>>) -> wasmtime::Result<()> {
+        tracing::trace!(
+            "wait for {} pollables and {} futures",
+            self.pollables.len(),
+            self.futures.get_ref().len()
+        );
+
+        let ready = if self.pollables.is_empty() {
+            if self.futures.get_ref().is_empty() {
+                bail!("guest task is pending with no pending host tasks");
+            } else {
+                Either::Right(self.futures.next().await)
+            }
+        } else {
+            let pollables = self
+                .pollables
+                .iter()
+                .map(|&index| {
+                    if let Task {
+                        state:
+                            TaskState::PollablePending {
+                                stream,
+                                make_future,
+                            },
+                        ..
+                    } = self.table.get(&Resource::<Task>::new_own(index))?
+                    {
+                        Ok((*stream, (*make_future, index)))
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .collect::<wasmtime::Result<HashMap<_, _>>>()?;
+
+            let mut futures = self
+                .table
+                .iter_entries(pollables)
+                .map(|(entry, (make_future, index))| Ok((make_future(entry?), index)))
+                .collect::<wasmtime::Result<Vec<_>>>()?;
+
+            let ready = future::poll_fn(move |cx| {
+                let mut any_ready = false;
+                let mut results = Vec::new();
+                for (fut, index) in futures.iter_mut() {
+                    match fut.as_mut().poll(cx) {
+                        Poll::Ready(()) => {
+                            results.push(*index);
+                            any_ready = true;
+                        }
+                        Poll::Pending => {}
+                    }
+                }
+                if any_ready {
+                    Poll::Ready(results)
+                } else {
+                    Poll::Pending
+                }
+            });
+
+            if self.futures.get_ref().is_empty() {
+                Either::Left(ready.await)
+            } else {
+                match future::select(ready, self.futures.next()).await {
+                    Either::Left((pollables, _)) => Either::Left(pollables),
+                    Either::Right((values, _)) => Either::Right(values),
+                }
+            }
+        };
+
+        match ready {
+            Either::Left(pollables) => {
+                for index in pollables {
+                    let ready = Resource::<Task>::new_own(index);
+                    let task = self.table.get_mut(&ready)?;
+                    task.reference_count += 1;
+                    task.state = TaskState::HostReady(Some(Box::new(Ok::<_, wasmtime::Error>(()))));
+                    self.pollables.remove(&index);
+
+                    if let Some(listen) = task.listen {
+                        input.entry(listen.poll).or_default().push(PollInput::Ready(
+                            PollInputReady {
+                                state: listen.state,
+                                ready,
+                            },
+                        ));
+                    }
+                }
+            }
+            Either::Right(values) => {
+                if let Some(values) = values {
+                    for value in values {
+                        match value {
+                            Either::Left(_) => {}
+                            Either::Right(((task_rep, result), _)) => {
+                                let ready = Resource::<Task>::new_own(task_rep);
+                                let task = self.table.get_mut(&ready)?;
+                                task.reference_count += 1;
+                                task.state = TaskState::HostReady(Some(result));
+
+                                if let Some(listen) = task.listen {
+                                    input.entry(listen.poll).or_default().push(PollInput::Ready(
+                                        PollInputReady {
+                                            state: listen.state,
+                                            ready,
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn task<'a, T: IsyswasfaView + Send>(
@@ -288,12 +407,20 @@ pub async fn await_ready<S: wasmtime::AsContextMut>(
 where
     <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
 {
+    let mut count = 0;
     let polls = isyswasfa(&mut store.as_context_mut()).polls.clone();
 
     let mut result = None;
     let mut input = HashMap::new();
     loop {
+        count += 1;
+        if count > 20 {
+            panic!();
+        }
+
         for (index, poll) in polls.iter().enumerate() {
+            tracing::trace!("input: {:?}", input.get(&index));
+
             let output = poll
                 .call_async(
                     store.as_context_mut(),
@@ -302,6 +429,8 @@ where
                 .await?
                 .0;
             poll.post_return_async(store.as_context_mut()).await?;
+
+            tracing::trace!("output: {output:?}");
 
             for output in output {
                 match output {
@@ -342,13 +471,12 @@ where
                                     state,
                                     cancel: pending,
                                 })),
-                            TaskState::HostReady(_) | TaskState::PollableReady => input
-                                .entry(index)
-                                .or_default()
-                                .push(PollInput::Ready(PollInputReady {
+                            TaskState::HostReady(_) => input.entry(index).or_default().push(
+                                PollInput::Ready(PollInputReady {
                                     state,
                                     ready: pending,
-                                })),
+                                }),
+                            ),
                             TaskState::GuestPending(GuestPending { on_cancel: Some(_) }) => {
                                 input.entry(index).or_default().push(PollInput::Listening(
                                     PollInputListening {
@@ -443,107 +571,12 @@ where
 
                 break Ok(ready);
             } else {
-                let context = &mut store.as_context_mut();
-                let state = context.data_mut().isyswasfa();
-                let ready = {
-                    let pollables = state
-                        .pollables
-                        .iter()
-                        .map(|&index| {
-                            if let Task {
-                                state:
-                                    TaskState::PollablePending {
-                                        stream,
-                                        make_future,
-                                    },
-                                ..
-                            } = state.table.get(&Resource::<Task>::new_own(index))?
-                            {
-                                Ok((*stream, (*make_future, index)))
-                            } else {
-                                unreachable!()
-                            }
-                        })
-                        .collect::<wasmtime::Result<HashMap<_, _>>>()?;
-
-                    let mut futures = state
-                        .table
-                        .iter_entries(pollables)
-                        .map(|(entry, (make_future, index))| Ok((make_future(entry?), index)))
-                        .collect::<wasmtime::Result<Vec<_>>>()?;
-
-                    let ready = future::poll_fn(move |cx| {
-                        let mut any_ready = false;
-                        let mut results = Vec::new();
-                        for (fut, index) in futures.iter_mut() {
-                            match fut.as_mut().poll(cx) {
-                                Poll::Ready(()) => {
-                                    results.push(*index);
-                                    any_ready = true;
-                                }
-                                Poll::Pending => {}
-                            }
-                        }
-                        if any_ready {
-                            Poll::Ready(results)
-                        } else {
-                            Poll::Pending
-                        }
-                    });
-
-                    match future::select(ready, state.futures.next()).await {
-                        Either::Left((pollables, _)) => Either::Left(pollables),
-                        Either::Right((values, _)) => Either::Right(values),
-                    }
-                };
-
-                match ready {
-                    Either::Left(pollables) => {
-                        for index in pollables {
-                            let ready = Resource::<Task>::new_own(index);
-                            let task = state.table.get_mut(&ready)?;
-                            task.reference_count += 1;
-                            task.state = TaskState::PollableReady;
-                            state.pollables.remove(&index);
-
-                            if let Some(listen) = task.listen {
-                                input.entry(listen.poll).or_default().push(PollInput::Ready(
-                                    PollInputReady {
-                                        state: listen.state,
-                                        ready,
-                                    },
-                                ));
-                            }
-                        }
-                    }
-                    Either::Right(values) => {
-                        if let Some(values) = values {
-                            for value in values {
-                                match value {
-                                    Either::Left(_) => {}
-                                    Either::Right(((task_rep, result), _)) => {
-                                        let ready = Resource::new_own(task_rep);
-                                        let context = &mut store.as_context_mut();
-                                        let task = task(context, &ready)?;
-                                        task.reference_count += 1;
-                                        task.state = TaskState::HostReady(Some(result));
-
-                                        if let Some(listen) = task.listen {
-                                            input.entry(listen.poll).or_default().push(
-                                                PollInput::Ready(PollInputReady {
-                                                    state: listen.state,
-                                                    ready,
-                                                }),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        } else if state.pollables.is_empty() {
-                            bail!("guest task is pending with no pending host tasks");
-                        }
-                    }
-                };
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .isyswasfa()
+                    .wait(&mut input)
+                    .await?;
             }
         }
     }
