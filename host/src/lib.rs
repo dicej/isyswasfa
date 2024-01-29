@@ -93,14 +93,15 @@ pub struct GuestPending {
 }
 
 pub enum TaskState {
-    HostPending(Option<oneshot::Sender<()>>),
-    HostReady(Option<Box<dyn Any + Send>>),
+    FuturePending(Option<oneshot::Sender<()>>),
+    FutureReady(Option<Box<dyn Any + Send>>),
     GuestPending(GuestPending),
     GuestReady(u32),
     PollablePending {
         stream: u32,
         make_future: MakeFuture,
     },
+    PollableReady,
 }
 
 type PollFunc = TypedFunc<(Vec<PollInput>,), (Vec<PollOutput>,)>;
@@ -153,7 +154,7 @@ impl IsyswasfaCtx {
         let (tx, rx) = oneshot::channel();
         let task = self.table.push(Task {
             reference_count: 1,
-            state: TaskState::HostPending(Some(tx)),
+            state: TaskState::FuturePending(Some(tx)),
             listen: None,
         })?;
         let rep = task.rep();
@@ -195,7 +196,7 @@ impl IsyswasfaCtx {
 
     pub fn get_ready<T: 'static>(&mut self, ready: Resource<Task>) -> wasmtime::Result<T> {
         let value = match &mut self.table.get_mut(&ready)?.state {
-            TaskState::HostReady(value) => *value.take().unwrap().downcast().unwrap(),
+            TaskState::FutureReady(value) => *value.take().unwrap().downcast().unwrap(),
             _ => bail!("unexpected task state"),
         };
 
@@ -279,7 +280,7 @@ impl IsyswasfaCtx {
                     let ready = Resource::<Task>::new_own(index);
                     let task = self.table.get_mut(&ready)?;
                     task.reference_count += 1;
-                    task.state = TaskState::HostReady(Some(Box::new(Ok::<_, wasmtime::Error>(()))));
+                    task.state = TaskState::PollableReady;
                     self.pollables.remove(&index);
 
                     if let Some(listen) = task.listen {
@@ -301,7 +302,7 @@ impl IsyswasfaCtx {
                                 let ready = Resource::<Task>::new_own(task_rep);
                                 let task = self.table.get_mut(&ready)?;
                                 task.reference_count += 1;
-                                task.state = TaskState::HostReady(Some(result));
+                                task.state = TaskState::FutureReady(Some(result));
 
                                 if let Some(listen) = task.listen {
                                     input.entry(listen.poll).or_default().push(PollInput::Ready(
@@ -464,19 +465,21 @@ where
                         task.listen = Some(StatePoll { state, poll: index });
 
                         match task.state {
-                            TaskState::HostPending(_) | TaskState::PollablePending { .. } => input
+                            TaskState::FuturePending(_) | TaskState::PollablePending { .. } => {
+                                input.entry(index).or_default().push(PollInput::Listening(
+                                    PollInputListening {
+                                        state,
+                                        cancel: pending,
+                                    },
+                                ))
+                            }
+                            TaskState::FutureReady(_) | TaskState::PollableReady => input
                                 .entry(index)
                                 .or_default()
-                                .push(PollInput::Listening(PollInputListening {
-                                    state,
-                                    cancel: pending,
-                                })),
-                            TaskState::HostReady(_) => input.entry(index).or_default().push(
-                                PollInput::Ready(PollInputReady {
+                                .push(PollInput::Ready(PollInputReady {
                                     state,
                                     ready: pending,
-                                }),
-                            ),
+                                })),
                             TaskState::GuestPending(GuestPending { on_cancel: Some(_) }) => {
                                 input.entry(index).or_default().push(PollInput::Listening(
                                     PollInputListening {
@@ -532,11 +535,13 @@ where
                         };
 
                         match &mut task.state {
-                            TaskState::HostPending(cancel_tx) => {
+                            TaskState::FuturePending(cancel_tx) => {
                                 cancel_tx.take();
                                 cancel_host_task(&mut store.as_context_mut(), cancel)?;
                             }
-                            TaskState::HostReady(_) => {
+                            TaskState::PollablePending { .. }
+                            | TaskState::FutureReady(_)
+                            | TaskState::PollableReady => {
                                 cancel_host_task(&mut store.as_context_mut(), cancel)?;
                             }
                             TaskState::GuestPending(GuestPending { on_cancel, .. }) => {
@@ -550,7 +555,7 @@ where
                                         cancel,
                                     }));
                             }
-                            _ => unreachable!(),
+                            TaskState::GuestReady(_) => unreachable!(),
                         }
                     }
                     PollOutput::CancelComplete(cancel) => {
@@ -653,6 +658,13 @@ impl<T: IsyswasfaView> PollHost for T {
     }
 
     fn block_isyswasfa_result(&mut self, ready: Resource<Task>) -> wasmtime::Result<()> {
-        self.isyswasfa().get_ready(ready)
+        let cx = self.isyswasfa();
+        if let TaskState::PollableReady = cx.table.get(&ready)?.state {
+            cx.drop(ready)?;
+
+            Ok(())
+        } else {
+            Err(anyhow!("unexpected task state"))
+        }
     }
 }
