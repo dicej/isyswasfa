@@ -137,15 +137,27 @@ fn transform_new(resolve: &Resolve, world: WorldId, poll_suffix: Option<&str>) -
 
     let mut new_resolve = resolve.clone();
 
-    let isyswasfa_package = new_resolve
-        .push(
-            UnresolvedPackage::parse(
-                &Path::new("isyswasfa.wit"),
-                include_str!("../../wit/deps/isyswasfa/isyswasfa.wit"),
+    let isyswasfa_package = resolve
+        .packages
+        .iter()
+        .find_map(|(id, p)| {
+            matches!(
+                (p.name.namespace.as_str(), p.name.name.as_str()),
+                ("isyswasfa", "isyswasfa")
             )
-            .unwrap(),
-        )
-        .unwrap();
+            .then_some(id)
+        })
+        .unwrap_or_else(|| {
+            new_resolve
+                .push(
+                    UnresolvedPackage::parse(
+                        &Path::new("isyswasfa.wit"),
+                        include_str!("../../wit/deps/isyswasfa/isyswasfa.wit"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+        });
 
     let isyswasfa_interface = new_resolve.packages[isyswasfa_package].interfaces["isyswasfa"];
 
@@ -168,15 +180,27 @@ fn transform_new(resolve: &Resolve, world: WorldId, poll_suffix: Option<&str>) -
         .keys()
         .any(|key| matches!(key, WorldKey::Interface(id) if is_wasi_io_poll(*id)))
     {
-        let io_package = new_resolve
-            .push(
-                UnresolvedPackage::parse(
-                    &Path::new("poll.wit"),
-                    include_str!("../../wit/deps/isyswasfa-io/poll.wit"),
+        let io_package = resolve
+            .packages
+            .iter()
+            .find_map(|(id, p)| {
+                matches!(
+                    (p.name.namespace.as_str(), p.name.name.as_str()),
+                    ("isyswasfa", "io")
                 )
-                .unwrap(),
-            )
-            .unwrap();
+                .then_some(id)
+            })
+            .unwrap_or_else(|| {
+                new_resolve
+                    .push(
+                        UnresolvedPackage::parse(
+                            &Path::new("poll.wit"),
+                            include_str!("../../wit/deps/isyswasfa-io/poll.wit"),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap()
+            });
 
         Some(new_resolve.packages[io_package].interfaces["poll"])
     } else {

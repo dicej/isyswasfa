@@ -111,6 +111,12 @@ fn add_pending(pending_state: PendingState) {
     unsafe { PENDING.push(pending_state) }
 }
 
+fn set_pending(pending: Vec<PendingState>) {
+    unsafe {
+        PENDING = pending;
+    }
+}
+
 fn take_pending() -> Vec<PendingState> {
     let pending = unsafe { mem::take(&mut PENDING) };
     assert!(!pending.is_empty());
@@ -190,6 +196,12 @@ pub fn first_poll<T: 'static>(future: impl Future<Output = T> + 'static) -> Resu
             Ok(*result.downcast().unwrap())
         }
     }
+}
+
+pub fn spawn(future: impl Future<Output = ()> + 'static) {
+    let pending = take_pending();
+    drop(first_poll(future));
+    set_pending(pending);
 }
 
 pub fn get_ready<T: 'static>(ready: Ready) -> T {

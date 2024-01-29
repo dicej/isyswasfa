@@ -15,7 +15,7 @@ mod test {
     };
 
     wasmtime::component::bindgen!({
-        path: "guest/wit",
+        path: "../wit",
         isyswasfa: true,
         with: {
             "wasi:clocks/monotonic-clock": wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock,

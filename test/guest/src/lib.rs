@@ -1,6 +1,6 @@
 mod bindings {
     wit_bindgen::generate!({
-        path: "wit",
+        path: "../../wit",
         isyswasfa: "-guest",
         exports: {
             "component:guest/baz": super::Component
