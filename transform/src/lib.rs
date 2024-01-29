@@ -1,10 +1,8 @@
 use {
-    indexmap::IndexMap,
-    std::{collections::HashMap, iter, path::Path},
+    std::{iter, path::Path},
     wit_parser::{
-        Docs, Function, FunctionKind, Handle, Interface, InterfaceId, Resolve, Result_, Results,
-        Type, TypeDef, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage, World, WorldId,
-        WorldItem, WorldKey,
+        Docs, Function, FunctionKind, Handle, InterfaceId, Resolve, Result_, Results, Type,
+        TypeDef, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage, WorldId, WorldItem, WorldKey,
     },
 };
 
@@ -13,8 +11,6 @@ struct Asyncify<'a> {
     new_resolve: Resolve,
     pending: TypeId,
     ready: TypeId,
-    interfaces: HashMap<InterfaceId, InterfaceId>,
-    functions: HashMap<WorldKey, (Function, Function)>,
 }
 
 impl<'a> Asyncify<'a> {
@@ -23,64 +19,47 @@ impl<'a> Asyncify<'a> {
         key: &WorldKey,
         item: &WorldItem,
     ) -> Vec<(WorldKey, WorldItem)> {
-        let mut new_key = || match key {
-            WorldKey::Name(name) => WorldKey::Name(name.clone()),
-            WorldKey::Interface(old) => {
-                WorldKey::Interface(if let Some(new) = self.interfaces.get(old).copied() {
-                    new
-                } else {
-                    let new = self.asyncify_interface(*old);
-                    self.interfaces.insert(*old, new);
-                    new
-                })
-            }
-        };
-
         match item {
             WorldItem::Interface(old) => {
-                vec![(
-                    new_key(),
-                    WorldItem::Interface(if let Some(new) = self.interfaces.get(old).copied() {
-                        new
-                    } else {
-                        let new = self.asyncify_interface(*old);
-                        self.interfaces.insert(*old, new);
-                        new
-                    }),
-                )]
+                self.asyncify_interface(*old);
+                vec![(key.clone(), item.clone())]
             }
             WorldItem::Function(old) => {
-                let new_key = |suffix| match key {
-                    WorldKey::Name(name) => WorldKey::Name(format!("{name}{suffix}")),
+                let name = match key {
+                    WorldKey::Name(name) => name,
                     WorldKey::Interface(_) => unreachable!(),
                 };
 
-                let new = if let Some(new) = self.functions.get(key).cloned() {
-                    Some(new)
-                } else {
-                    if let Some(new) = self.asyncify_function(old) {
-                        self.functions.insert(key.clone(), new.clone());
-                        Some(new)
-                    } else {
-                        None
-                    }
-                };
-
-                if let Some((a, b)) = new {
+                if let Some((a, b)) = self.asyncify_function(old) {
                     vec![
-                        (new_key("-isyswasfa"), WorldItem::Function(a)),
-                        (new_key("-isyswasfa-result"), WorldItem::Function(b)),
+                        (
+                            WorldKey::Name(format!("{name}-isyswasfa")),
+                            WorldItem::Function(a),
+                        ),
+                        (
+                            WorldKey::Name(format!("{name}-isyswasfa-result")),
+                            WorldItem::Function(b),
+                        ),
                     ]
                 } else {
                     vec![(key.clone(), item.clone())]
                 }
             }
-            WorldItem::Type(old) => vec![(new_key(), WorldItem::Type(*old))],
+            WorldItem::Type(_) => vec![(key.clone(), item.clone())],
         }
     }
 
-    fn asyncify_interface(&mut self, interface: InterfaceId) -> InterfaceId {
+    fn asyncify_interface(&mut self, interface: InterfaceId) {
         let old = &self.old_resolve.interfaces[interface];
+
+        // TODO: make interface and function include/exclude lists configurable
+        if let Some("wasi") = old
+            .package
+            .map(|p| self.old_resolve.packages[p].name.namespace.as_str())
+        {
+            return;
+        }
+
         let functions = old
             .functions
             .iter()
@@ -93,13 +72,7 @@ impl<'a> Asyncify<'a> {
             })
             .collect();
 
-        self.new_resolve.interfaces.alloc(Interface {
-            name: old.name.clone(),
-            types: old.types.clone(),
-            functions,
-            docs: old.docs.clone(),
-            package: old.package,
-        })
+        self.new_resolve.interfaces[interface].functions = functions;
     }
 
     fn asyncify_function(&mut self, function: &Function) -> Option<(Function, Function)> {
@@ -111,26 +84,33 @@ impl<'a> Asyncify<'a> {
                         name: format!("{}-isyswasfa", function.name),
                         kind: function.kind.clone(),
                         params: function.params.clone(),
-                        results: match &function.results {
-                            Results::Anon(ty) => {
-                                Results::Anon(Type::Id(self.new_resolve.types.alloc(TypeDef {
-                                    name: None,
-                                    kind: TypeDefKind::Result(Result_ {
-                                        ok: Some(*ty),
-                                        err: Some(Type::Id(self.pending)),
-                                    }),
-                                    owner: TypeOwner::None,
-                                    docs: Docs::default(),
-                                })))
-                            }
-                            Results::Named(_) => {
-                                todo!("handle functions returning multiple named results")
-                            }
-                        },
+                        results: Results::Anon(Type::Id(self.new_resolve.types.alloc(TypeDef {
+                            name: None,
+                            kind: TypeDefKind::Result(Result_ {
+                                ok: match &function.results {
+                                    Results::Anon(ty) => Some(*ty),
+                                    Results::Named(named) => {
+                                        if named.is_empty() {
+                                            None
+                                        } else {
+                                            todo!(
+                                                "handle functions returning multiple named results",
+                                            )
+                                        }
+                                    }
+                                },
+                                err: Some(Type::Id(self.pending)),
+                            }),
+                            owner: TypeOwner::None,
+                            docs: Docs::default(),
+                        }))),
                         docs: function.docs.clone(),
                     },
                     Function {
-                        name: format!("{}-isyswasfa-result", function.name),
+                        name: format!(
+                            "{}-isyswasfa-result",
+                            function.name.replace("[method]", "[static]")
+                        ),
                         kind: match &function.kind {
                             FunctionKind::Freestanding | FunctionKind::Static(_) => {
                                 function.kind.clone()
@@ -148,11 +128,11 @@ impl<'a> Asyncify<'a> {
     }
 }
 
-pub fn transform(
-    resolve: &Resolve,
-    world: WorldId,
-    poll_suffix: Option<&str>,
-) -> (Resolve, WorldId) {
+pub fn transform(resolve: &mut Resolve, world: WorldId, poll_suffix: Option<&str>) {
+    *resolve = transform_new(resolve, world, poll_suffix);
+}
+
+fn transform_new(resolve: &Resolve, world: WorldId, poll_suffix: Option<&str>) -> Resolve {
     let old_world = &resolve.worlds[world];
 
     let mut new_resolve = resolve.clone();
@@ -168,16 +148,6 @@ pub fn transform(
         .unwrap();
 
     let isyswasfa_interface = new_resolve.packages[isyswasfa_package].interfaces["isyswasfa"];
-
-    let new_world = new_resolve.worlds.alloc(World {
-        name: old_world.name.clone(),
-        imports: IndexMap::new(),
-        exports: IndexMap::new(),
-        package: old_world.package,
-        docs: old_world.docs.clone(),
-        includes: Vec::new(),
-        include_names: Vec::new(),
-    });
 
     let pending = new_resolve.interfaces[isyswasfa_interface].types["pending"];
     let pending = new_resolve.types.alloc(TypeDef {
@@ -226,8 +196,6 @@ pub fn transform(
         new_resolve,
         pending,
         ready,
-        interfaces: HashMap::new(),
-        functions: HashMap::new(),
     };
 
     let imports = iter::once((
@@ -243,7 +211,7 @@ pub fn transform(
     .collect();
 
     let exports = old_world
-        .imports
+        .exports
         .iter()
         .flat_map(|(key, item)| asyncify.asyncify_world_item(key, item))
         .chain(poll_function.map(|poll_function| {
@@ -255,10 +223,10 @@ pub fn transform(
         .collect();
 
     {
-        let new_world = &mut asyncify.new_resolve.worlds[new_world];
+        let new_world = &mut asyncify.new_resolve.worlds[world];
         new_world.imports = imports;
         new_world.exports = exports;
     }
 
-    (asyncify.new_resolve, new_world)
+    asyncify.new_resolve
 }

@@ -5,6 +5,7 @@ interface baz {
 }
 
 world bar {
+    import isyswasfa:io/poll;
     import baz;
     export baz;
 }
