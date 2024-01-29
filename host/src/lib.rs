@@ -408,17 +408,11 @@ pub async fn await_ready<S: wasmtime::AsContextMut>(
 where
     <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
 {
-    let mut count = 0;
     let polls = isyswasfa(&mut store.as_context_mut()).polls.clone();
 
     let mut result = None;
     let mut input = HashMap::new();
     loop {
-        count += 1;
-        if count > 20 {
-            panic!();
-        }
-
         for (index, poll) in polls.iter().enumerate() {
             tracing::trace!("input: {:?}", input.get(&index));
 
