@@ -1,7 +1,0 @@
-interface poll {
-  use wasi:io/poll@0.2.0.{pollable};
-  use isyswasfa.{pending, ready};
-
-  block-isyswasfa: func(pollable: borrow<pollable>) -> result<_, pending>;
-  block-isyswasfa-result: func(ready: ready);
-}

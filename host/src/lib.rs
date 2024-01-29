@@ -4,7 +4,7 @@ wasmtime::component::bindgen!({
         use isyswasfa:isyswasfa/isyswasfa.{poll-input, poll-output};
 
         import isyswasfa:isyswasfa/isyswasfa;
-        import isyswasfa:isyswasfa/poll;
+        import isyswasfa:io/poll;
 
         export dummy: func(input: poll-input) -> poll-output;                
     ",
@@ -26,13 +26,13 @@ use {
         future::{self, Either, FutureExt, Select},
         stream::{FuturesUnordered, ReadyChunks, StreamExt},
     },
-    isyswasfa::isyswasfa::{
-        isyswasfa::{
+    isyswasfa::{
+        io::poll::Host as PollHost,
+        isyswasfa::isyswasfa::{
             Host as IsyswasfaHost, HostCancel, HostPending, HostReady, PollInput, PollInputCancel,
             PollInputListening, PollInputReady, PollOutput, PollOutputListen, PollOutputPending,
             PollOutputReady,
         },
-        poll::Host as PollHost,
     },
     once_cell::sync::Lazy,
     std::{
