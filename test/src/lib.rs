@@ -4,11 +4,11 @@ mod test {
         anyhow::{anyhow, Result},
         async_trait::async_trait,
         bytes::Bytes,
-        futures::future::{self, Either, FutureExt},
+        futures::future::{self, Either},
         http_body_util::{combinators::BoxBody, BodyExt, Full},
         hyper::Request,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
-        std::{env, time::Duration},
+        std::{env, pin::pin, time::Duration},
         tokio::{fs, process::Command},
         wasmtime::{
             component::{Component, Linker, ResourceTable},
@@ -220,12 +220,10 @@ mod test {
             response.body.take().unwrap()
         };
 
-        let response_body = match future::select(
-            async move { isyswasfa_host::poll_loop(&mut store).await }.boxed(),
-            response_body.collect(),
-        )
-        .await
-        {
+        let poll_loop = isyswasfa_host::poll_loop(&mut store);
+        let poll_loop = pin!(poll_loop);
+
+        let response_body = match future::select(poll_loop, response_body.collect()).await {
             Either::Left((Ok(()), collect)) => collect.await,
             Either::Left((Err(e), _)) => return Err(e),
             Either::Right((body, _)) => body,
