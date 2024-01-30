@@ -10,6 +10,7 @@ mod bindings {
 
                 import isyswasfa:isyswasfa/isyswasfa;
                 import isyswasfa:io/poll;
+                import wasi:io/streams@0.2.0;
 
                 export dummy: func(input: poll-input) -> poll-output;
             }
@@ -38,7 +39,10 @@ use {
                 Ready,
             },
         },
-        wasi::io::poll::Pollable,
+        wasi::io::{
+            poll::Pollable,
+            streams::{InputStream, OutputStream, StreamError},
+        },
     },
     by_address::ByAddress,
     futures::{channel::oneshot, future::FutureExt},
@@ -59,7 +63,8 @@ use {
 };
 
 pub use bindings::{
-    isyswasfa::isyswasfa::isyswasfa as isyswasfa_interface, wasi::io::poll as poll_interface,
+    isyswasfa::isyswasfa::isyswasfa as isyswasfa_interface,
+    wasi::io::{poll as poll_interface, streams as streams_interface},
 };
 
 fn dummy_waker() -> Waker {
@@ -360,5 +365,34 @@ impl IntoFuture for Pollable {
                 Err(pending) => poll::block_isyswasfa_result(await_ready(pending).await),
             }
         })
+    }
+}
+
+pub async fn copy(rx: InputStream, tx: OutputStream) -> Result<(), StreamError> {
+    // TODO: use `OutputStream::splice`
+    const MAX_READ: u64 = 64 * 1024;
+    loop {
+        match rx.read(MAX_READ) {
+            Ok(chunk) if chunk.is_empty() => rx.subscribe().await,
+            Ok(chunk) => {
+                let mut offset = 0;
+                while offset < chunk.len() {
+                    let count = usize::try_from(tx.check_write()?)
+                        .unwrap()
+                        .min(chunk.len() - offset);
+
+                    if count > 0 {
+                        tx.write(&chunk[offset..][..count])?;
+                        offset += count
+                    } else {
+                        tx.subscribe().await
+                    }
+                }
+            }
+            Err(StreamError::Closed) => break Ok(()),
+            Err(StreamError::LastOperationFailed(error)) => {
+                break Err(StreamError::LastOperationFailed(error))
+            }
+        }
     }
 }

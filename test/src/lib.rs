@@ -4,17 +4,23 @@ mod test {
         anyhow::{anyhow, Result},
         async_trait::async_trait,
         bytes::Bytes,
-        futures::future::{self, Either},
+        futures::{
+            channel::mpsc,
+            future::{self, Either},
+            sink::SinkExt,
+        },
         http_body_util::{combinators::BoxBody, BodyExt, Full},
         hyper::Request,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
-        std::{env, pin::pin, time::Duration},
+        std::{env, path::Path, pin::pin, time::Duration},
         tokio::{fs, process::Command},
         wasmtime::{
             component::{Component, Linker, ResourceTable},
             Config, Engine, Store,
         },
-        wasmtime_wasi::preview2::{command, WasiCtx, WasiCtxBuilder, WasiView},
+        wasmtime_wasi::preview2::{
+            command, InputStream, StreamError, WasiCtx, WasiCtxBuilder, WasiView,
+        },
         wasmtime_wasi_http::{proxy, WasiHttpCtx, WasiHttpView},
         wit_component::ComponentEncoder,
     };
@@ -30,10 +36,10 @@ mod test {
         });
     }
 
-    mod service {
+    mod wasi_http_handler {
         wasmtime::component::bindgen!({
             path: "../wit",
-            world: "service",
+            world: "wasi-http-handler",
             isyswasfa: true,
             with: {
                 "wasi:clocks/monotonic-clock": wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock,
@@ -44,7 +50,21 @@ mod test {
         });
     }
 
+    mod service {
+        wasmtime::component::bindgen!({
+            path: "../wit",
+            world: "service",
+            isyswasfa: true,
+            with: {
+                "wasi:io/error": wasmtime_wasi::preview2::bindings::wasi::io::error,
+                "wasi:io/streams": wasmtime_wasi::preview2::bindings::wasi::io::streams,
+            }
+        });
+    }
+
     async fn build_component(src_path: &str, name: &str) -> Result<Vec<u8>> {
+        _ = fs::create_dir(Path::new(src_path).join("target")).await;
+
         let adapter_path = if let Ok(path) = env::var("ISYSWASFA_TEST_ADAPTER") {
             path
         } else {
@@ -170,14 +190,14 @@ mod test {
     }
 
     #[tokio::test]
-    async fn service() -> Result<()> {
+    async fn wasi_http_handler() -> Result<()> {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
 
         let engine = Engine::new(&config)?;
 
-        let component_bytes = build_component("service", "service").await?;
+        let component_bytes = build_component("wasi-http-handler", "wasi_http_handler").await?;
 
         let component = Component::new(&engine, &component_bytes)?;
 
@@ -196,8 +216,9 @@ mod test {
             },
         );
 
-        let (service, instance) =
-            service::Service::instantiate_async(&mut store, &component, &linker).await?;
+        let (handler, instance) =
+            wasi_http_handler::WasiHttpHandler::instantiate_async(&mut store, &component, &linker)
+                .await?;
 
         isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
 
@@ -209,7 +230,7 @@ mod test {
                 Full::new(Bytes::from_static(body)).map_err(|_| unreachable!()),
             ))?)?;
 
-        let response = service
+        let response = handler
             .component_test_incoming_handler()
             .call_handle(&mut store, request)
             .await?;
@@ -230,6 +251,101 @@ mod test {
         }?;
 
         assert_eq!(body as &[_], &response_body.to_bytes());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn service() -> Result<()> {
+        use {isyswasfa_host::ReceiverStream, service::exports::component::test::http::Request};
+
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        config.async_support(true);
+
+        let engine = Engine::new(&config)?;
+
+        let component_bytes = build_component("service", "service").await?;
+
+        let component = Component::new(&engine, &component_bytes)?;
+
+        let mut linker = Linker::new(&engine);
+
+        command::add_to_linker(&mut linker)?;
+        isyswasfa_host::add_to_linker(&mut linker)?;
+
+        let mut store = Store::new(
+            &engine,
+            Ctx {
+                wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+                wasi_http: WasiHttpCtx,
+                isyswasfa: IsyswasfaCtx::new(),
+            },
+        );
+
+        let (service, instance) =
+            service::Service::instantiate_async(&mut store, &component, &linker).await?;
+
+        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+
+        let body = b"And the mome raths outgrabe";
+
+        let request_rx = {
+            let (mut request_tx, request_rx) = mpsc::channel(1);
+            request_tx.send(Bytes::from_static(body)).await?;
+            request_rx
+        };
+
+        let request_body = Some(
+            WasiView::table(store.data_mut())
+                .push(InputStream::Host(Box::new(ReceiverStream::new(request_rx))))?,
+        );
+
+        let response = service
+            .component_test_http()
+            .call_handle(
+                &mut store,
+                &Request {
+                    method: "POST".into(),
+                    uri: "/foo".into(),
+                    headers: Vec::new(),
+                    body: request_body,
+                },
+            )
+            .await?;
+
+        assert!(response.status == 200);
+
+        let InputStream::Host(mut response_rx) =
+            WasiView::table(store.data_mut()).delete(response.body.unwrap())?
+        else {
+            unreachable!();
+        };
+
+        let response_body = async move {
+            let mut buffer = Vec::new();
+
+            loop {
+                match response_rx.read(1024) {
+                    Ok(bytes) if bytes.is_empty() => response_rx.ready().await,
+                    Ok(bytes) => buffer.extend_from_slice(&bytes),
+                    Err(StreamError::Closed) => break Ok::<_, anyhow::Error>(buffer),
+                    Err(e) => break Err(anyhow!("error reading response body: {e:?}")),
+                }
+            }
+        };
+        let response_body = pin!(response_body);
+
+        let poll_loop = isyswasfa_host::poll_loop(&mut store);
+        let poll_loop = pin!(poll_loop);
+
+        let response_body = match future::select(poll_loop, response_body).await {
+            Either::Left((Ok(()), body)) => body.await,
+            Either::Left((Err(e), _)) => return Err(e),
+            Either::Right((body, _)) => body,
+        }?;
+
+        assert_eq!(body as &[_], &response_body);
 
         Ok(())
     }

@@ -2,7 +2,7 @@ mod bindings {
     wit_bindgen::generate!({
         path: "../../wit",
         world: "round-trip",
-        isyswasfa: "-guest",
+        isyswasfa: "-round-trip",
         exports: {
             "component:test/baz": super::Component
         }

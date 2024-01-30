@@ -725,8 +725,14 @@ impl<T: IsyswasfaView> PipeHost for T {
 
 const MAX_CHUNK_SIZE: usize = 64 * 1024;
 
-struct SenderStream {
+pub struct SenderStream {
     tx: mpsc::Sender<Bytes>,
+}
+
+impl SenderStream {
+    pub fn new(tx: mpsc::Sender<Bytes>) -> Self {
+        Self { tx }
+    }
 }
 
 impl HostOutputStream for SenderStream {
@@ -764,9 +770,18 @@ impl Subscribe for SenderStream {
     }
 }
 
-struct ReceiverStream {
+pub struct ReceiverStream {
     rx: mpsc::Receiver<Bytes>,
     buffer: Bytes,
+}
+
+impl ReceiverStream {
+    pub fn new(rx: mpsc::Receiver<Bytes>) -> Self {
+        Self {
+            rx,
+            buffer: Bytes::new(),
+        }
+    }
 }
 
 impl HostInputStream for ReceiverStream {
