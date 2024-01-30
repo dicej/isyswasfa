@@ -11,6 +11,7 @@ mod test {
         },
         http_body_util::{combinators::BoxBody, BodyExt, Full},
         hyper::Request,
+        indexmap::IndexMap,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
         std::{env, path::Path, pin::pin, time::Duration},
         tokio::{fs, process::Command},
@@ -257,7 +258,65 @@ mod test {
 
     #[tokio::test]
     async fn service() -> Result<()> {
-        use {isyswasfa_host::ReceiverStream, service::exports::component::test::http::Request};
+        service_test(&build_component("service", "service").await?).await
+    }
+
+    #[tokio::test]
+    async fn middleware() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+
+        let service = build_component("service", "service").await?;
+        let service_file = dir.path().join("service.wasm");
+        fs::write(&service_file, &service).await?;
+
+        let middleware = build_component("middleware", "middleware").await?;
+        let middleware_file = dir.path().join("middleware.wasm");
+        fs::write(&middleware_file, &middleware).await?;
+
+        use wasm_compose::{
+            composer::ComponentComposer,
+            config::{Config, Instantiation, InstantiationArg},
+        };
+
+        let composed = &ComponentComposer::new(
+            &middleware_file,
+            &Config {
+                dir: dir.path().to_owned(),
+                definitions: Vec::new(),
+                search_paths: Vec::new(),
+                skip_validation: false,
+                import_components: false,
+                disallow_imports: false,
+                dependencies: IndexMap::new(),
+                instantiations: [(
+                    "root".to_owned(),
+                    Instantiation {
+                        dependency: None,
+                        arguments: [(
+                            "component:test/http-handler".to_owned(),
+                            InstantiationArg {
+                                instance: "service".into(),
+                                export: Some("component:test/http-handler".into()),
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .compose()?;
+
+        service_test(composed).await
+    }
+
+    async fn service_test(component_bytes: &[u8]) -> Result<()> {
+        use {
+            isyswasfa_host::ReceiverStream,
+            service::exports::component::test::http_handler::Request,
+        };
 
         let mut config = Config::new();
         config.wasm_component_model(true);
@@ -265,9 +324,7 @@ mod test {
 
         let engine = Engine::new(&config)?;
 
-        let component_bytes = build_component("service", "service").await?;
-
-        let component = Component::new(&engine, &component_bytes)?;
+        let component = Component::new(&engine, component_bytes)?;
 
         let mut linker = Linker::new(&engine);
 
@@ -286,7 +343,7 @@ mod test {
         let (service, instance) =
             service::Service::instantiate_async(&mut store, &component, &linker).await?;
 
-        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+        isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
         let body = b"And the mome raths outgrabe";
 
@@ -301,23 +358,23 @@ mod test {
                 .push(InputStream::Host(Box::new(ReceiverStream::new(request_rx))))?,
         );
 
-        let response = service
-            .component_test_http()
+        let (response, response_body) = service
+            .component_test_http_handler()
             .call_handle(
                 &mut store,
                 &Request {
                     method: "POST".into(),
                     uri: "/foo".into(),
                     headers: Vec::new(),
-                    body: request_body,
                 },
+                request_body,
             )
             .await?;
 
         assert!(response.status == 200);
 
         let InputStream::Host(mut response_rx) =
-            WasiView::table(store.data_mut()).delete(response.body.unwrap())?
+            WasiView::table(store.data_mut()).delete(response_body.unwrap())?
         else {
             unreachable!();
         };

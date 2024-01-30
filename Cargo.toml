@@ -9,5 +9,5 @@ exclude = [
   "test/guest",
   "wit-bindgen",
   "wasmtime",
+  "wasm-tools"
 ]
-

@@ -1,8 +1,8 @@
 mod bindings {
     wit_bindgen::generate!({
         path: "../../wit",
-        world: "service",
-        isyswasfa: "-service",
+        world: "middleware",
+        isyswasfa: "-middleware",
         exports: {
             "component:test/http-handler": super::Component
         }
@@ -12,6 +12,7 @@ mod bindings {
 use {
     async_trait::async_trait,
     bindings::{
+        component::test::http_handler,
         exports::component::test::http_handler::{Guest, Request, Response},
         isyswasfa::io::pipe,
     },
@@ -23,25 +24,22 @@ struct Component;
 #[async_trait(?Send)]
 impl Guest for Component {
     async fn handle(
-        _request: Request,
+        request: Request,
         request_body: Option<InputStream>,
     ) -> (Response, Option<InputStream>) {
-        (
-            Response {
-                status: 200,
-                headers: Vec::new(),
-            },
-            request_body.map(|request_rx| {
-                let (response_tx, response_rx) = pipe::make_pipe();
+        let pipe = |rx| {
+            let (pipe_tx, pipe_rx) = pipe::make_pipe();
 
-                isyswasfa_guest::spawn(async move {
-                    isyswasfa_guest::copy(request_rx, response_tx)
-                        .await
-                        .unwrap();
-                });
+            isyswasfa_guest::spawn(async move {
+                isyswasfa_guest::copy(rx, pipe_tx).await.unwrap();
+            });
 
-                response_rx
-            }),
-        )
+            pipe_rx
+        };
+
+        let (response, response_body) =
+            http_handler::handle(&request, request_body.map(pipe)).await;
+
+        (response, response_body.map(pipe))
     }
 }

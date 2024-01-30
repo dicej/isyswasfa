@@ -4,3 +4,6 @@
 [submodule "wasmtime"]
 	path = wasmtime
 	url = https://github.com/dicej/wasmtime
+[submodule "wasm-tools"]
+	path = wasm-tools
+	url = https://github.com/dicej/wasm-tools
