@@ -133,15 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "guest"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "isyswasfa-guest",
- "wit-bindgen",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -248,6 +239,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "291ec9ab5efd934aaf503a6466c5d5251535d108ee747472c3977cc5acc868ef"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "round-trip"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "isyswasfa-guest",
+ "wit-bindgen",
 ]
 
 [[package]]

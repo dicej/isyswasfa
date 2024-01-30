@@ -3,15 +3,18 @@ name = "isyswasfa-test"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[dev-dependencies]
 anyhow = { version = "1.0.79", features = ["backtrace"] }
 async-trait = "0.1.77"
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros", "process", "fs", "time"] }
 wasmparser = "0.119.0"
 wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
 wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime-wasi-http = { path = "../wasmtime/crates/wasi-http" }
 isyswasfa-host = { path = "../host" }
 wit-component = "0.20.0"
-
-[dev-dependencies]
 reqwest = "0.11.23"
+hyper = "1.1.0"
+bytes = "1.5.0"
+http-body-util = "0.1.0"
+futures = "0.3.30"

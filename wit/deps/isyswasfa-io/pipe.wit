@@ -1,0 +1,5 @@
+interface pipe {
+  use wasi:io/streams@0.2.0.{input-stream, output-stream};
+
+  make-pipe: func() -> tuple<input-stream, output-stream>;
+}

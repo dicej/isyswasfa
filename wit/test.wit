@@ -1,0 +1,26 @@
+package component:test;
+
+interface baz {
+    foo: func(s: string) -> string;
+}
+
+world round-trip {
+    import wasi:clocks/monotonic-clock@0.2.0;
+    import baz;
+    export baz;
+}
+
+interface incoming-handler {
+  use wasi:http/types@0.2.0.{incoming-request, outgoing-response};
+
+  handle: func(request: incoming-request) -> outgoing-response;
+}
+
+world middleware {
+  import incoming-handler;
+  export incoming-handler;
+}
+
+world service {
+  export incoming-handler;
+}

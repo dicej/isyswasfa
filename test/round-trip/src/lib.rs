@@ -1,9 +1,10 @@
 mod bindings {
     wit_bindgen::generate!({
         path: "../../wit",
+        world: "round-trip",
         isyswasfa: "-guest",
         exports: {
-            "component:guest/baz": super::Component
+            "component:test/baz": super::Component
         }
     });
 }
@@ -11,7 +12,7 @@ mod bindings {
 use {
     async_trait::async_trait,
     bindings::{
-        component::guest::baz, exports::component::guest::baz::Guest as Baz,
+        component::test::baz, exports::component::test::baz::Guest as Baz,
         wasi::clocks::monotonic_clock,
     },
 };

@@ -210,7 +210,7 @@ impl IsyswasfaCtx {
         value
     }
 
-    async fn wait(&mut self, input: &mut HashMap<usize, Vec<PollInput>>) -> wasmtime::Result<()> {
+    async fn wait(&mut self, input: &mut HashMap<usize, Vec<PollInput>>) -> wasmtime::Result<bool> {
         tracing::trace!(
             "wait for {} pollables and {} futures",
             self.pollables.len(),
@@ -219,7 +219,7 @@ impl IsyswasfaCtx {
 
         let ready = if self.pollables.is_empty() {
             if self.futures.get_ref().is_empty() {
-                bail!("guest task is pending with no pending host tasks");
+                return Ok(false);
             } else {
                 Either::Right(self.futures.next().await)
             }
@@ -324,7 +324,7 @@ impl IsyswasfaCtx {
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -406,10 +406,28 @@ where
     Ok(())
 }
 
+pub async fn poll_loop<S: wasmtime::AsContextMut>(store: S) -> wasmtime::Result<()>
+where
+    <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
+{
+    poll(store, None).await
+}
+
 pub async fn await_ready<S: wasmtime::AsContextMut>(
-    mut store: S,
+    store: S,
     pending: Resource<Task>,
 ) -> wasmtime::Result<Resource<Task>>
+where
+    <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
+{
+    poll(store, Some(&pending)).await?;
+    Ok(pending)
+}
+
+pub async fn poll<S: wasmtime::AsContextMut>(
+    mut store: S,
+    pending: Option<&Resource<Task>>,
+) -> wasmtime::Result<()>
 where
     <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
 {
@@ -438,7 +456,7 @@ where
                         state: guest_state,
                         ready,
                     }) => {
-                        if ready.rep() == pending.rep() {
+                        if Some(ready.rep()) == pending.map(Resource::rep) {
                             *state(&mut store.as_context_mut(), &ready)? =
                                 TaskState::GuestReady(guest_state);
 
@@ -501,7 +519,7 @@ where
                         }
                     }
                     PollOutput::Pending(PollOutputPending { state, cancel }) => {
-                        if cancel.rep() == pending.rep() {
+                        if Some(cancel.rep()) == pending.map(Resource::rep) {
                             drop(&mut store.as_context_mut(), cancel)?;
                         } else {
                             guest_pending(&mut store.as_context_mut(), &cancel)?.on_cancel =
@@ -571,16 +589,24 @@ where
 
         if input.is_empty() {
             if let Some(ready) = result.take() {
-                drop(&mut store.as_context_mut(), pending)?;
+                drop(&mut store.as_context_mut(), ready)?;
 
-                break Ok(ready);
+                break Ok(());
             } else {
-                store
+                let waited = store
                     .as_context_mut()
                     .data_mut()
                     .isyswasfa()
                     .wait(&mut input)
                     .await?;
+
+                if !waited {
+                    if pending.is_some() {
+                        bail!("guest task is pending with no pending host tasks");
+                    } else {
+                        break Ok(());
+                    }
+                }
             }
         }
     }
