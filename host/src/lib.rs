@@ -7,6 +7,7 @@ wasmtime::component::bindgen!({
 
         import isyswasfa:isyswasfa/isyswasfa;
         import isyswasfa:io/poll;
+        import isyswasfa:io/pipe;
 
         export dummy: func(input: poll-input) -> poll-output;                
     ",
@@ -15,6 +16,8 @@ wasmtime::component::bindgen!({
     },
     with: {
         "wasi:io/poll/pollable": Pollable,
+        "wasi:io/streams/input-stream": InputStream,
+        "wasi:io/streams/output-stream": OutputStream,
         "isyswasfa:isyswasfa/isyswasfa/ready": Task,
         "isyswasfa:isyswasfa/isyswasfa/pending": Task,
         "isyswasfa:isyswasfa/isyswasfa/cancel": Task,
@@ -23,13 +26,15 @@ wasmtime::component::bindgen!({
 
 use {
     anyhow::{anyhow, bail},
+    async_trait::async_trait,
+    bytes::Bytes,
     futures::{
-        channel::oneshot,
+        channel::{mpsc, oneshot},
         future::{self, Either, FutureExt, Select},
-        stream::{FuturesUnordered, ReadyChunks, StreamExt},
+        stream::{FusedStream, FuturesUnordered, ReadyChunks, StreamExt},
     },
     isyswasfa::{
-        io::poll::Host as PollHost,
+        io::{pipe::Host as PipeHost, poll::Host as PollHost},
         isyswasfa::isyswasfa::{
             Host as IsyswasfaHost, HostCancel, HostPending, HostReady, PollInput, PollInputCancel,
             PollInputListening, PollInputReady, PollOutput, PollOutputListen, PollOutputPending,
@@ -41,6 +46,7 @@ use {
         any::Any,
         collections::{HashMap, HashSet},
         future::Future,
+        mem,
         pin::Pin,
         sync::Arc,
         task::{Context, Poll, Wake, Waker},
@@ -50,21 +56,27 @@ use {
         component::{Instance, Linker, Resource, ResourceTable, TypedFunc},
         StoreContextMut,
     },
-    wasmtime_wasi::preview2::{MakeFuture, WasiView},
+    wasmtime_wasi::preview2::{
+        HostInputStream, HostOutputStream, MakeFuture, StreamError, Subscribe, WasiView,
+    },
 };
 
 pub use {
     isyswasfa::{
         io::poll as isyswasfa_poll_interface, isyswasfa::isyswasfa as isyswasfa_interface,
     },
-    wasmtime_wasi::preview2::{bindings::wasi::io::poll as wasi_poll_interface, Pollable},
+    wasmtime_wasi::preview2::{
+        bindings::wasi::io::{poll as wasi_poll_interface, streams as wasi_streams_interface},
+        InputStream, OutputStream, Pollable,
+    },
 };
 
 pub fn add_to_linker<T: WasiView + IsyswasfaView + Send>(
     linker: &mut Linker<T>,
 ) -> wasmtime::Result<()> {
     isyswasfa::isyswasfa::isyswasfa::add_to_linker(linker, |ctx| ctx)?;
-    isyswasfa::io::poll::add_to_linker(linker, |ctx| ctx)
+    isyswasfa::io::poll::add_to_linker(linker, |ctx| ctx)?;
+    isyswasfa::io::pipe::add_to_linker(linker, |ctx| ctx)
 }
 
 fn dummy_waker() -> Waker {
@@ -690,6 +702,94 @@ impl<T: IsyswasfaView> PollHost for T {
             Ok(())
         } else {
             Err(anyhow!("unexpected task state"))
+        }
+    }
+}
+
+impl<T: IsyswasfaView> PipeHost for T {
+    fn make_pipe(&mut self) -> wasmtime::Result<(Resource<OutputStream>, Resource<InputStream>)> {
+        let (tx, rx) = mpsc::channel(2);
+        Ok((
+            self.isyswasfa()
+                .table
+                .push(Box::new(SenderStream { tx }) as OutputStream)?,
+            self.isyswasfa()
+                .table
+                .push(InputStream::Host(Box::new(ReceiverStream {
+                    rx,
+                    buffer: Bytes::new(),
+                })))?,
+        ))
+    }
+}
+
+const MAX_CHUNK_SIZE: usize = 64 * 1024;
+
+struct SenderStream {
+    tx: mpsc::Sender<Bytes>,
+}
+
+impl HostOutputStream for SenderStream {
+    fn write(&mut self, bytes: Bytes) -> Result<(), StreamError> {
+        match self.tx.try_send(bytes) {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_full() => {
+                Err(StreamError::Trap(anyhow!("write exceeded budget")))
+            }
+            Err(_) => Err(StreamError::Closed),
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), StreamError> {
+        if self.tx.is_closed() {
+            Err(StreamError::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_write(&mut self) -> Result<usize, StreamError> {
+        match self.tx.poll_ready(&mut Context::from_waker(&dummy_waker())) {
+            Poll::Ready(Ok(_)) => Ok(MAX_CHUNK_SIZE),
+            Poll::Ready(Err(_)) => Err(StreamError::Closed),
+            Poll::Pending => Ok(0),
+        }
+    }
+}
+
+#[async_trait]
+impl Subscribe for SenderStream {
+    async fn ready(&mut self) {
+        mem::drop(future::poll_fn(|cx| self.tx.poll_ready(cx)).await)
+    }
+}
+
+struct ReceiverStream {
+    rx: mpsc::Receiver<Bytes>,
+    buffer: Bytes,
+}
+
+impl HostInputStream for ReceiverStream {
+    fn read(&mut self, size: usize) -> Result<Bytes, StreamError> {
+        if self.buffer.is_empty() {
+            if self.rx.is_terminated() {
+                Err(StreamError::Closed)
+            } else {
+                Ok(Bytes::new())
+            }
+        } else {
+            Ok(self.buffer.split_to(size.min(self.buffer.len())))
+        }
+    }
+}
+
+#[async_trait]
+impl Subscribe for ReceiverStream {
+    async fn ready(&mut self) {
+        if self.buffer.is_empty() {
+            if let Some(bytes) = self.rx.next().await {
+                self.buffer = bytes;
+            }
         }
     }
 }
