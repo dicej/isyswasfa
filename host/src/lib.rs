@@ -91,7 +91,7 @@ fn dummy_waker() -> Waker {
     WAKER.clone().into()
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct StatePoll {
     state: u32,
     poll: usize,
@@ -105,10 +105,12 @@ pub struct Task {
     listen: Option<StatePoll>,
 }
 
+#[derive(Debug)]
 pub struct GuestPending {
     on_cancel: Option<StatePoll>,
 }
 
+#[derive(Debug)]
 pub enum TaskState {
     FuturePending(Option<oneshot::Sender<()>>),
     FutureReady(Option<Box<dyn Any + Send>>),
@@ -198,7 +200,7 @@ impl IsyswasfaCtx {
     fn guest_state(&self, ready: Resource<Task>) -> wasmtime::Result<u32> {
         match &self.table.get(&ready)?.state {
             TaskState::GuestReady(guest_state) => Ok(*guest_state),
-            _ => Err(anyhow!("unexpected task state")),
+            state => Err(anyhow!("unexpected task state: {state:?}")),
         }
     }
 
@@ -214,7 +216,7 @@ impl IsyswasfaCtx {
     pub fn get_ready<T: 'static>(&mut self, ready: Resource<Task>) -> wasmtime::Result<T> {
         let value = match &mut self.table.get_mut(&ready)?.state {
             TaskState::FutureReady(value) => *value.take().unwrap().downcast().unwrap(),
-            _ => bail!("unexpected task state"),
+            state => bail!("unexpected task state: {state:?}"),
         };
 
         self.drop(ready)?;
@@ -443,6 +445,9 @@ pub async fn poll<S: wasmtime::AsContextMut>(
 where
     <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
 {
+    // TODO: We're probably leaking task handles in various ways here, so we need to make sure reference counts are
+    // accurate and table entries removed as appropriate.
+
     let polls = isyswasfa(&mut store.as_context_mut()).polls.clone();
 
     let mut result = None;
@@ -468,10 +473,10 @@ where
                         state: guest_state,
                         ready,
                     }) => {
-                        if Some(ready.rep()) == pending.map(Resource::rep) {
-                            *state(&mut store.as_context_mut(), &ready)? =
-                                TaskState::GuestReady(guest_state);
+                        *state(&mut store.as_context_mut(), &ready)? =
+                            TaskState::GuestReady(guest_state);
 
+                        if Some(ready.rep()) == pending.map(Resource::rep) {
                             result = Some(ready);
                         } else if let Some(listen) =
                             task(&mut store.as_context_mut(), &ready)?.listen
@@ -482,10 +487,6 @@ where
                                     ready,
                                 },
                             ));
-                        } else {
-                            let tmp = Resource::new_own(ready.rep());
-                            *state(&mut store.as_context_mut(), &tmp)? =
-                                TaskState::GuestReady(guest_state);
                         }
                     }
                     PollOutput::Listen(PollOutputListen { state, pending }) => {
@@ -696,12 +697,13 @@ impl<T: IsyswasfaView> PollHost for T {
 
     fn block_isyswasfa_result(&mut self, ready: Resource<Task>) -> wasmtime::Result<()> {
         let cx = self.isyswasfa();
-        if let TaskState::PollableReady = cx.table.get(&ready)?.state {
-            cx.drop(ready)?;
+        match &cx.table.get(&ready)?.state {
+            TaskState::PollableReady => {
+                cx.drop(ready)?;
 
-            Ok(())
-        } else {
-            Err(anyhow!("unexpected task state"))
+                Ok(())
+            }
+            state => Err(anyhow!("unexpected task state: {state:?}")),
         }
     }
 }
