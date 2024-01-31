@@ -13,7 +13,7 @@ mod test {
         hyper::Request,
         indexmap::IndexMap,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
-        std::{env, path::Path, pin::pin, time::Duration},
+        std::{env, io::Write, path::Path, pin::pin, time::Duration},
         tokio::{fs, process::Command},
         wasmtime::{
             component::{Component, Linker, ResourceTable},
@@ -258,7 +258,7 @@ mod test {
 
     #[tokio::test]
     async fn service() -> Result<()> {
-        service_test(&build_component("service", "service").await?).await
+        service_test(&build_component("service", "service").await?, false).await
     }
 
     #[tokio::test]
@@ -309,11 +309,15 @@ mod test {
         )
         .compose()?;
 
-        service_test(composed).await
+        service_test(composed, true).await
     }
 
-    async fn service_test(component_bytes: &[u8]) -> Result<()> {
+    async fn service_test(component_bytes: &[u8], use_compression: bool) -> Result<()> {
         use {
+            flate2::{
+                write::{DeflateDecoder, DeflateEncoder},
+                Compression,
+            },
             isyswasfa_host::ReceiverStream,
             service::exports::component::test::http_handler::Request,
         };
@@ -349,7 +353,17 @@ mod test {
 
         let request_rx = {
             let (mut request_tx, request_rx) = mpsc::channel(1);
-            request_tx.send(Bytes::from_static(body)).await?;
+
+            request_tx
+                .send(if use_compression {
+                    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+                    encoder.write_all(body)?;
+                    encoder.finish()?.into()
+                } else {
+                    Bytes::from_static(body)
+                })
+                .await?;
+
             request_rx
         };
 
@@ -358,23 +372,30 @@ mod test {
                 .push(InputStream::Host(Box::new(ReceiverStream::new(request_rx))))?,
         );
 
-        let (response, response_body) = service
+        let response = service
             .component_test_http_handler()
             .call_handle(
                 &mut store,
                 &Request {
                     method: "POST".into(),
                     uri: "/foo".into(),
-                    headers: Vec::new(),
+                    headers: if use_compression {
+                        vec![
+                            ("content-encoding".into(), b"deflate".into()),
+                            ("accept-encoding".into(), b"deflate".into()),
+                        ]
+                    } else {
+                        Vec::new()
+                    },
+                    body: request_body,
                 },
-                request_body,
             )
             .await?;
 
         assert!(response.status == 200);
 
         let InputStream::Host(mut response_rx) =
-            WasiView::table(store.data_mut()).delete(response_body.unwrap())?
+            WasiView::table(store.data_mut()).delete(response.body.unwrap())?
         else {
             unreachable!();
         };
@@ -401,6 +422,19 @@ mod test {
             Either::Left((Err(e), _)) => return Err(e),
             Either::Right((body, _)) => body,
         }?;
+
+        let response_body = if use_compression {
+            assert!(response.headers.iter().any(|(k, v)| matches!(
+                (k.as_str(), v.as_slice()),
+                ("content-encoding", b"deflate")
+            )));
+
+            let mut decoder = DeflateDecoder::new(Vec::new());
+            decoder.write_all(&response_body)?;
+            decoder.finish()?
+        } else {
+            response_body
+        };
 
         assert_eq!(body as &[_], &response_body);
 

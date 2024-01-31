@@ -368,31 +368,38 @@ impl IntoFuture for Pollable {
     }
 }
 
-pub async fn copy(rx: InputStream, tx: OutputStream) -> Result<(), StreamError> {
+pub async fn copy(rx: &InputStream, tx: &OutputStream) -> Result<(), StreamError> {
     // TODO: use `OutputStream::splice`
-    const MAX_READ: u64 = 64 * 1024;
-    loop {
-        match rx.read(MAX_READ) {
-            Ok(chunk) if chunk.is_empty() => rx.subscribe().await,
-            Ok(chunk) => {
-                let mut offset = 0;
-                while offset < chunk.len() {
-                    let count = usize::try_from(tx.check_write()?)
-                        .unwrap()
-                        .min(chunk.len() - offset);
+    while let Some(chunk) = read(rx, 64 * 1024).await? {
+        write_all(tx, &chunk).await?;
+    }
+    Ok(())
+}
 
-                    if count > 0 {
-                        tx.write(&chunk[offset..][..count])?;
-                        offset += count
-                    } else {
-                        tx.subscribe().await
-                    }
-                }
-            }
-            Err(StreamError::Closed) => break Ok(()),
-            Err(StreamError::LastOperationFailed(error)) => {
-                break Err(StreamError::LastOperationFailed(error))
-            }
+pub async fn write_all(tx: &OutputStream, chunk: &[u8]) -> Result<(), StreamError> {
+    let mut offset = 0;
+    while offset < chunk.len() {
+        let count = usize::try_from(tx.check_write()?)
+            .unwrap()
+            .min(chunk.len() - offset);
+
+        if count > 0 {
+            tx.write(&chunk[offset..][..count])?;
+            offset += count
+        } else {
+            tx.subscribe().await
+        }
+    }
+    Ok(())
+}
+
+pub async fn read(rx: &InputStream, max: u64) -> Result<Option<Vec<u8>>, StreamError> {
+    loop {
+        match rx.read(max) {
+            Ok(chunk) if chunk.is_empty() => rx.subscribe().await,
+            Ok(chunk) => break Ok(Some(chunk)),
+            Err(StreamError::Closed) => break Ok(None),
+            Err(error) => break Err(error),
         }
     }
 }

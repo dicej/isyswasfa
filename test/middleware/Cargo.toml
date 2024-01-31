@@ -7,6 +7,7 @@ edition = "2021"
 async-trait = "0.1.77"
 wit-bindgen = { path = "../../wit-bindgen/crates/guest-rust" }
 isyswasfa-guest = { path = "../../guest" }
+flate2 = "1.0.28"
 
 [lib]
 crate-type = ["cdylib"]

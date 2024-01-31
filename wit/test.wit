@@ -11,23 +11,26 @@ world round-trip {
 }
 
 interface http-types {
+  use wasi:io/streams@0.2.0.{input-stream};
+
   record request {
     method: string,
     uri: string,
     headers: list<tuple<string, list<u8>>>,
+    body: option<input-stream>,
   }
 
   record response {
     status: u16,
     headers: list<tuple<string, list<u8>>>,
+    body: option<input-stream>,
   }
 }
 
 interface http-handler {
-  use wasi:io/streams@0.2.0.{input-stream};
   use http-types.{request, response};
   
-  handle: func(request: request, body: option<input-stream>) -> tuple<response, option<input-stream>>;
+  handle: func(request: request) -> response;
 }
 
 world service {

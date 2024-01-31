@@ -16,30 +16,104 @@ use {
         exports::component::test::http_handler::{Guest, Request, Response},
         isyswasfa::io::pipe,
     },
+    flate2::{
+        write::{DeflateDecoder, DeflateEncoder},
+        Compression,
+    },
     isyswasfa_guest::streams_interface::InputStream,
+    std::io::Write,
 };
 
 struct Component;
 
 #[async_trait(?Send)]
 impl Guest for Component {
-    async fn handle(
-        request: Request,
-        request_body: Option<InputStream>,
-    ) -> (Response, Option<InputStream>) {
-        let pipe = |rx| {
-            let (pipe_tx, pipe_rx) = pipe::make_pipe();
+    async fn handle(request: Request) -> Response {
+        let accept_deflated = accept_deflated(&request.headers);
 
-            isyswasfa_guest::spawn(async move {
-                isyswasfa_guest::copy(rx, pipe_tx).await.unwrap();
-            });
+        let mut response = http_handler::handle(Request {
+            body: request.body.map(|rx| {
+                if true || is_deflated(&request.headers) {
+                    deflate_decode(rx)
+                } else {
+                    rx
+                }
+            }),
+            ..request
+        })
+        .await;
 
-            pipe_rx
-        };
+        if accept_deflated {
+            response
+                .headers
+                .push(("content-encoding".into(), b"deflate".into()));
+        }
 
-        let (response, response_body) =
-            http_handler::handle(&request, request_body.map(pipe)).await;
-
-        (response, response_body.map(pipe))
+        Response {
+            body: response.body.map(|rx| {
+                if accept_deflated {
+                    deflate_encode(rx)
+                } else {
+                    rx
+                }
+            }),
+            ..response
+        }
     }
+}
+
+fn accept_deflated(headers: &[(String, Vec<u8>)]) -> bool {
+    headers
+        .iter()
+        .any(|(k, v)| matches!((k.as_str(), v.as_slice()), ("accept-encoding", b"deflate")))
+}
+
+fn is_deflated(headers: &[(String, Vec<u8>)]) -> bool {
+    headers
+        .iter()
+        .any(|(k, v)| matches!((k.as_str(), v.as_slice()), ("content-encoding", b"deflate")))
+}
+
+fn deflate_decode(rx: InputStream) -> InputStream {
+    let (pipe_tx, pipe_rx) = pipe::make_pipe();
+
+    isyswasfa_guest::spawn(async move {
+        let mut decoder = DeflateDecoder::new(Vec::new());
+
+        while let Some(chunk) = isyswasfa_guest::read(&rx, 64 * 1024).await.unwrap() {
+            decoder.write_all(&chunk).unwrap();
+            isyswasfa_guest::write_all(&pipe_tx, decoder.get_ref())
+                .await
+                .unwrap();
+            decoder.get_mut().clear()
+        }
+
+        isyswasfa_guest::write_all(&pipe_tx, &decoder.finish().unwrap())
+            .await
+            .unwrap();
+    });
+
+    pipe_rx
+}
+
+fn deflate_encode(rx: InputStream) -> InputStream {
+    let (pipe_tx, pipe_rx) = pipe::make_pipe();
+
+    isyswasfa_guest::spawn(async move {
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+
+        while let Some(chunk) = isyswasfa_guest::read(&rx, 64 * 1024).await.unwrap() {
+            encoder.write_all(&chunk).unwrap();
+            isyswasfa_guest::write_all(&pipe_tx, encoder.get_ref())
+                .await
+                .unwrap();
+            encoder.get_mut().clear()
+        }
+
+        isyswasfa_guest::write_all(&pipe_tx, &encoder.finish().unwrap())
+            .await
+            .unwrap();
+    });
+
+    pipe_rx
 }

@@ -30,8 +30,8 @@ impl Guest for Component {
         isyswasfa_guest::spawn(async move {
             let request_body = request.consume().unwrap();
             isyswasfa_guest::copy(
-                request_body.stream().unwrap(),
-                response_body.write().unwrap(),
+                &request_body.stream().unwrap(),
+                &response_body.write().unwrap(),
             )
             .await
             .unwrap();

@@ -21,3 +21,4 @@ futures = "0.3.30"
 wasm-compose = { path = "../wasm-tools/crates/wasm-compose" }
 tempfile = "3.9.0"
 indexmap = "2.2.1"
+flate2 = "1.0.28"
