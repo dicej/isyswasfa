@@ -4,7 +4,7 @@ An experimental polyfill for composable concurrency based on the [WebAssembly Co
 
 ### Background
 
-As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI Preview 2 includes support for asynchronous I/O via the `wasi:io/poll` interface -- including multiplexing -- it does not compose well: only one component in a composition can block at a time.  A major goal for WASI Preview 3 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
+As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI Preview 2 includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI Preview 3 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
 
 ### So what is this?
 
@@ -30,14 +30,14 @@ In short, it's an experiment to see how close we can get to the Preview 3 develo
 - Guest support for other languages supporting stackless coroutines
   - E.g. Python, JavaScript, and .NET
   - Eventually, the Component Model will also support composable concurrency for stackful coroutines (e.g. Goroutines, Java fibers, etc.), but those are out of scope for this polyfill.
-- Host-side code generation for bridging async and sync modules using backpressure to serialize async->sync calls without blocking the caller
+- Host-side code generation for bridging async and sync components using backpressure to serialize async->sync calls without blocking the caller
 
 ### Examples
 
 The [test](./test) directory contains a few guest programs and corresponding host code for executing them:
 
 - [round-trip](./test/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
-- [wasi-http-handler](./test/wasi-http-handler/src/lib.rs): an example of asynchronously handling a `wasi:http/types.incoming-request`, spawning a task to stream the request body back to the response prior, and returning a `wasi:http/types.outgoing-request` without waiting for the stream task to complete.  Note that this does away with the `wasi:http/types.response-outparam` type, which is no longer needed with first-class async support.
+- [wasi-http-handler](./test/wasi-http-handler/src/lib.rs): an example of asynchronously handling a `wasi:http/types.incoming-request`, spawning a task to stream the request body back to the client, and returning a `wasi:http/types.outgoing-request` without waiting for the stream task to complete.  Note that this does away with the `wasi:http/types.response-outparam` type, which is no longer needed with first-class async support.
 - [service](./test/service/src/lib.rs) and [middleware](./test/middleware/src/lib.rs): a pair of components which are composed to demonstrate asynchronous I/O across composed components, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use a (highly simplified) version of what we expect `wasi-http` 0.3.0 will provide: a single `request` type and a single `response` type, with no need for incoming and outgoing variations.
 
 ### How it works
