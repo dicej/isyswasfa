@@ -317,7 +317,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
         if pollables.is_empty() {
             break take_output();
         } else {
-            for ByAddress(future_state) in pollables.into_iter() {
+            for ByAddress(future_state) in pollables {
                 let poll = match future_state.borrow_mut().deref_mut() {
                     FutureState::Pending { future, .. } => {
                         future.as_mut().poll(&mut Context::from_waker(
