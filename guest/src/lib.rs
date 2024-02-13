@@ -58,7 +58,7 @@ use {
         pin::Pin,
         rc::Rc,
         sync::Arc,
-        task::{Context, Poll, Wake, Waker},
+        task::{Context, Poll, Wake},
     },
 };
 
@@ -67,16 +67,15 @@ pub use bindings::{
     wasi::io::{poll as poll_interface, streams as streams_interface},
 };
 
-fn dummy_waker() -> Waker {
-    struct DummyWaker;
+struct FutureStateWaker(Rc<RefCell<FutureState>>);
 
-    impl Wake for DummyWaker {
-        fn wake(self: Arc<Self>) {}
+unsafe impl Send for FutureStateWaker {}
+unsafe impl Sync for FutureStateWaker {}
+
+impl Wake for FutureStateWaker {
+    fn wake(self: Arc<Self>) {
+        insert_pollable(self.0.clone())
     }
-
-    static WAKER: Lazy<Arc<DummyWaker>> = Lazy::new(|| Arc::new(DummyWaker));
-
-    WAKER.clone().into()
 }
 
 type BoxFuture = Pin<Box<dyn Future<Output = Box<dyn Any>> + 'static>>;
@@ -93,7 +92,7 @@ impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         match mem::replace(self.0.borrow_mut().deref_mut(), CancelState::Cancel) {
             CancelState::Pending | CancelState::Cancel => {}
-            CancelState::Listening(cancel) => push(PollOutput::Cancel(cancel)),
+            CancelState::Listening(cancel) => push_output(PollOutput::Cancel(cancel)),
         }
     }
 }
@@ -104,13 +103,25 @@ struct PendingState {
     cancel_state: Rc<RefCell<CancelState>>,
 }
 
-static mut PENDING: Vec<PendingState> = Vec::new();
+type Pollables = HashMap<ByAddress<Rc<RefCell<FutureState>>>, Rc<RefCell<FutureState>>>;
+
+static mut POLLABLES: Lazy<Pollables> = Lazy::new(HashMap::new);
+
+fn insert_pollable(pollable: Rc<RefCell<FutureState>>) {
+    unsafe { POLLABLES.insert(ByAddress(pollable.clone()), pollable) };
+}
+
+fn take_pollables() -> Pollables {
+    unsafe { mem::take(POLLABLES.deref_mut()) }
+}
 
 static mut POLL_OUTPUT: Vec<PollOutput> = Vec::new();
 
-fn push(output: PollOutput) {
+fn push_output(output: PollOutput) {
     unsafe { POLL_OUTPUT.push(output) }
 }
+
+static mut PENDING: Vec<PendingState> = Vec::new();
 
 fn add_pending(pending_state: PendingState) {
     unsafe { PENDING.push(pending_state) }
@@ -156,7 +167,9 @@ impl Drop for FutureState {
     fn drop(&mut self) {
         match self {
             Self::Pending { .. } => (),
-            Self::Cancelled(cancel) => push(PollOutput::CancelComplete(cancel.take().unwrap())),
+            Self::Cancelled(cancel) => {
+                push_output(PollOutput::CancelComplete(cancel.take().unwrap()))
+            }
             Self::Ready(ready) => assert!(ready.is_none()),
         }
     }
@@ -164,7 +177,7 @@ impl Drop for FutureState {
 
 fn push_listens(future_state: &Rc<RefCell<FutureState>>) {
     for pending in take_pending_nonempty() {
-        push(PollOutput::Listen(PollOutputListen {
+        push_output(PollOutput::Listen(PollOutputListen {
             pending: pending.pending,
             state: u32::try_from(Box::into_raw(Box::new(ListenState {
                 tx: pending.tx,
@@ -178,22 +191,22 @@ fn push_listens(future_state: &Rc<RefCell<FutureState>>) {
 
 pub fn first_poll<T: 'static>(future: impl Future<Output = T> + 'static) -> Result<T, Pending> {
     let mut future = Box::pin(future.map(|v| Box::new(v) as Box<dyn Any>)) as BoxFuture;
+    let future_state = Rc::new(RefCell::new(FutureState::Ready(None)));
 
-    match future
-        .as_mut()
-        .poll(&mut Context::from_waker(&dummy_waker()))
-    {
+    match future.as_mut().poll(&mut Context::from_waker(
+        &Arc::new(FutureStateWaker(future_state.clone())).into(),
+    )) {
         Poll::Pending => {
             let (pending, cancel, ready) = isyswasfa::make_task();
-            let future_state = Rc::new(RefCell::new(FutureState::Pending {
+            *future_state.borrow_mut() = FutureState::Pending {
                 ready: Some(ready),
                 future,
                 cancel_states: Vec::new(),
-            }));
+            };
 
             push_listens(&future_state);
 
-            push(PollOutput::Pending(PollOutputPending {
+            push_output(PollOutput::Pending(PollOutputPending {
                 cancel,
                 state: u32::try_from(Rc::into_raw(future_state) as usize).unwrap(),
             }));
@@ -227,14 +240,12 @@ fn cancel_all(cancels: &[Rc<RefCell<CancelState>>]) {
     for cancel in cancels {
         match mem::replace(cancel.borrow_mut().deref_mut(), CancelState::Cancel) {
             CancelState::Pending | CancelState::Cancel => {}
-            CancelState::Listening(cancel) => push(PollOutput::Cancel(cancel)),
+            CancelState::Listening(cancel) => push_output(PollOutput::Cancel(cancel)),
         }
     }
 }
 
 pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
-    let mut pollables = HashMap::new();
-
     for input in input {
         match input {
             PollInput::Listening(PollInputListening { state, cancel }) => {
@@ -257,7 +268,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
 
                     *listen_state.cancel_state.borrow_mut() = CancelState::Listening(cancel)
                 } else {
-                    push(PollOutput::Cancel(cancel));
+                    push_output(PollOutput::Cancel(cancel));
                 }
             }
             PollInput::Ready(PollInputReady { state, ready }) => {
@@ -273,10 +284,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
                     CancelState::Cancel => {}
                 }
 
-                pollables.insert(
-                    ByAddress(listen_state.future_state.clone()),
-                    listen_state.future_state,
-                );
+                insert_pollable(listen_state.future_state);
             }
             PollInput::Cancel(PollInputCancel { state, cancel }) => {
                 let future_state =
@@ -299,44 +307,52 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
         }
     }
 
-    for future_state in pollables.into_values() {
-        let poll = match future_state.borrow_mut().deref_mut() {
-            FutureState::Pending { future, .. } => future
-                .as_mut()
-                .poll(&mut Context::from_waker(&dummy_waker())),
-            _ => continue,
-        };
+    loop {
+        let pollables = take_pollables();
 
-        match poll {
-            Poll::Pending => push_listens(&future_state),
-            Poll::Ready(result) => {
-                clear_pending();
-
-                let mut old = mem::replace(
-                    future_state.borrow_mut().deref_mut(),
-                    FutureState::Ready(Some(result)),
-                );
-
-                let FutureState::Pending {
-                    ready,
-                    cancel_states,
-                    ..
-                } = &mut old
-                else {
-                    unreachable!()
+        if pollables.is_empty() {
+            break unsafe { mem::take(&mut POLL_OUTPUT) };
+        } else {
+            for future_state in pollables.into_values() {
+                let poll = match future_state.borrow_mut().deref_mut() {
+                    FutureState::Pending { future, .. } => {
+                        future.as_mut().poll(&mut Context::from_waker(
+                            &Arc::new(FutureStateWaker(future_state.clone())).into(),
+                        ))
+                    }
+                    _ => continue,
                 };
 
-                cancel_all(cancel_states);
+                match poll {
+                    Poll::Pending => push_listens(&future_state),
+                    Poll::Ready(result) => {
+                        clear_pending();
 
-                push(PollOutput::Ready(PollOutputReady {
-                    ready: ready.take().unwrap(),
-                    state: u32::try_from(Rc::into_raw(future_state) as usize).unwrap(),
-                }));
+                        let mut old = mem::replace(
+                            future_state.borrow_mut().deref_mut(),
+                            FutureState::Ready(Some(result)),
+                        );
+
+                        let FutureState::Pending {
+                            ready,
+                            cancel_states,
+                            ..
+                        } = &mut old
+                        else {
+                            unreachable!()
+                        };
+
+                        cancel_all(cancel_states);
+
+                        push_output(PollOutput::Ready(PollOutputReady {
+                            ready: ready.take().unwrap(),
+                            state: u32::try_from(Rc::into_raw(future_state) as usize).unwrap(),
+                        }));
+                    }
+                }
             }
         }
     }
-
-    unsafe { mem::take(&mut POLL_OUTPUT) }
 }
 
 pub async fn await_ready(pending: Pending) -> Ready {
