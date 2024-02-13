@@ -121,6 +121,10 @@ fn push_output(output: PollOutput) {
     unsafe { POLL_OUTPUT.push(output) }
 }
 
+fn take_output() -> Vec<PollOutput> {
+    unsafe { mem::take(&mut POLL_OUTPUT) }
+}
+
 static mut PENDING: Vec<PendingState> = Vec::new();
 
 fn add_pending(pending_state: PendingState) {
@@ -311,7 +315,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
         let pollables = take_pollables();
 
         if pollables.is_empty() {
-            break unsafe { mem::take(&mut POLL_OUTPUT) };
+            break take_output();
         } else {
             for ByAddress(future_state) in pollables.into_iter() {
                 let poll = match future_state.borrow_mut().deref_mut() {
