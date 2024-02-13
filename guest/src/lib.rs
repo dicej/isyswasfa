@@ -50,7 +50,7 @@ use {
     std::{
         any::Any,
         cell::RefCell,
-        collections::HashMap,
+        collections::HashSet,
         future::Future,
         future::IntoFuture,
         mem,
@@ -103,12 +103,12 @@ struct PendingState {
     cancel_state: Rc<RefCell<CancelState>>,
 }
 
-type Pollables = HashMap<ByAddress<Rc<RefCell<FutureState>>>, Rc<RefCell<FutureState>>>;
+type Pollables = HashSet<ByAddress<Rc<RefCell<FutureState>>>>;
 
-static mut POLLABLES: Lazy<Pollables> = Lazy::new(HashMap::new);
+static mut POLLABLES: Lazy<Pollables> = Lazy::new(HashSet::new);
 
 fn insert_pollable(pollable: Rc<RefCell<FutureState>>) {
-    unsafe { POLLABLES.insert(ByAddress(pollable.clone()), pollable) };
+    unsafe { POLLABLES.insert(ByAddress(pollable)) };
 }
 
 fn take_pollables() -> Pollables {
@@ -313,7 +313,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
         if pollables.is_empty() {
             break unsafe { mem::take(&mut POLL_OUTPUT) };
         } else {
-            for future_state in pollables.into_values() {
+            for ByAddress(future_state) in pollables.into_iter() {
                 let poll = match future_state.borrow_mut().deref_mut() {
                     FutureState::Pending { future, .. } => {
                         future.as_mut().poll(&mut Context::from_waker(
