@@ -194,7 +194,11 @@ fn push_listens(future_state: &Rc<RefCell<FutureState>>) {
 }
 
 pub fn first_poll<T: 'static>(future: impl Future<Output = T> + 'static) -> Result<T, Pending> {
-    let mut future = Box::pin(future.map(|v| Box::new(v) as Box<dyn Any>)) as BoxFuture;
+    do_first_poll(Box::pin(future.map(|v| Box::new(v) as Box<dyn Any>)))
+        .map(|result| *result.downcast().unwrap())
+}
+
+fn do_first_poll(mut future: BoxFuture) -> Result<Box<dyn Any>, Pending> {
     let future_state = Rc::new(RefCell::new(FutureState::Ready(None)));
 
     match future.as_mut().poll(&mut Context::from_waker(
@@ -219,7 +223,7 @@ pub fn first_poll<T: 'static>(future: impl Future<Output = T> + 'static) -> Resu
         }
         Poll::Ready(result) => {
             clear_pending();
-            Ok(*result.downcast().unwrap())
+            Ok(result)
         }
     }
 }
