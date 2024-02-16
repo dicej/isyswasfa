@@ -22,7 +22,6 @@ mod test {
         wasmtime_wasi::preview2::{
             command, InputStream, StreamError, WasiCtx, WasiCtxBuilder, WasiView,
         },
-        wasmtime_wasi_http::{proxy, WasiHttpCtx, WasiHttpView},
         wit_component::ComponentEncoder,
     };
 
@@ -40,13 +39,12 @@ mod test {
     mod wasi_http_handler {
         wasmtime::component::bindgen!({
             path: "../wit",
-            world: "wasi-http-handler",
+            world: "wasi:http/proxy@0.3.0-draft-2024-02-14",
             isyswasfa: true,
             with: {
                 "wasi:clocks/monotonic-clock": wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock,
                 "wasi:io/error": wasmtime_wasi::preview2::bindings::wasi::io::error,
                 "wasi:io/streams": wasmtime_wasi::preview2::bindings::wasi::io::streams,
-                "wasi:http/types": wasmtime_wasi_http::bindings::wasi::http::types,
             }
         });
     }
@@ -105,7 +103,6 @@ mod test {
 
     struct Ctx {
         wasi: WasiCtx,
-        wasi_http: WasiHttpCtx,
         isyswasfa: IsyswasfaCtx,
     }
 
@@ -115,15 +112,6 @@ mod test {
         }
         fn ctx(&mut self) -> &mut WasiCtx {
             &mut self.wasi
-        }
-    }
-
-    impl WasiHttpView for Ctx {
-        fn table(&mut self) -> &mut ResourceTable {
-            self.isyswasfa.table()
-        }
-        fn ctx(&mut self) -> &mut WasiHttpCtx {
-            &mut self.wasi_http
         }
     }
 
@@ -167,7 +155,6 @@ mod test {
             &engine,
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
-                wasi_http: WasiHttpCtx,
                 isyswasfa: IsyswasfaCtx::new(),
             },
         );
@@ -205,21 +192,18 @@ mod test {
         let mut linker = Linker::new(&engine);
 
         command::add_to_linker(&mut linker)?;
-        proxy::add_only_http_to_linker(&mut linker)?;
         isyswasfa_host::add_to_linker(&mut linker)?;
 
         let mut store = Store::new(
             &engine,
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
-                wasi_http: WasiHttpCtx,
                 isyswasfa: IsyswasfaCtx::new(),
             },
         );
 
         let (handler, instance) =
-            wasi_http_handler::WasiHttpHandler::instantiate_async(&mut store, &component, &linker)
-                .await?;
+            wasi_http_handler::Proxy::instantiate_async(&mut store, &component, &linker).await?;
 
         isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
 
@@ -232,12 +216,12 @@ mod test {
             ))?)?;
 
         let response = handler
-            .component_test_incoming_handler()
+            .wasi_http_handler()
             .call_handle(&mut store, request)
             .await?;
 
         let response_body = {
-            let response = WasiHttpView::table(store.data_mut()).get_mut(&response)?;
+            let response = IsyswasfaView::table(store.data_mut()).get_mut(&response)?;
             assert!(response.status.is_success());
             response.body.take().unwrap()
         };
@@ -293,10 +277,10 @@ mod test {
                     Instantiation {
                         dependency: None,
                         arguments: [(
-                            "component:test/http-handler".to_owned(),
+                            "wasi:http/handler@0.3.0-draft-2024-02-14".to_owned(),
                             InstantiationArg {
                                 instance: "service".into(),
-                                export: Some("component:test/http-handler".into()),
+                                export: Some("wasi:http/handler@0.3.0-draft-2024-02-14".into()),
                             },
                         )]
                         .into_iter()
@@ -319,7 +303,7 @@ mod test {
                 Compression,
             },
             isyswasfa_host::ReceiverStream,
-            service::exports::component::test::http_handler::Request,
+            service::wasi::http::types::Request,
         };
 
         let mut config = Config::new();
@@ -339,7 +323,6 @@ mod test {
             &engine,
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
-                wasi_http: WasiHttpCtx,
                 isyswasfa: IsyswasfaCtx::new(),
             },
         );
@@ -373,7 +356,7 @@ mod test {
         );
 
         let response = service
-            .component_test_http_handler()
+            .wasi_http_handler()
             .call_handle(
                 &mut store,
                 &Request {

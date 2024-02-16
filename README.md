@@ -45,7 +45,7 @@ The [test](./test) directory contains a few guest programs and corresponding hos
 I've lightly modified the `wit-bindgen` and `wasmtime-wit-bindgen` Rust code generators to support an `isyswasfa` configuration option.  When that option is enabled, the code generators "asyncify" each function in non-WASI imports and exports by splitting it into two functions: one for initiating a task, and other for retrieving the result when the task has completed.  For example:
 
 - `foo: func(s: string) -> string` becomes:
-  - `foo-isyswasfa: func(s: string) -> result<string, pending>`, where `pending` is a resource handle representing an asynchronous task, returned if a result is not immediately available, and
+  - `foo-isyswasfa-start: func(s: string) -> result<string, pending>`, where `pending` is a resource handle representing an asynchronous task, returned if a result is not immediately available, and
   - `foo-isyswasfa-result: func(r: ready) -> string`, where `ready` is a resource handle representing the completion of an asynchronous task.
   
 These two functions become part of the new component type seen by the host or composition tool, while the user-visible generated code presents only a single `async` function to the application developer.

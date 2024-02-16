@@ -10,45 +10,12 @@ world round-trip {
   export baz;
 }
 
-interface http-types {
-  use wasi:io/streams@0.2.0.{input-stream};
-
-  record request {
-    method: string,
-    uri: string,
-    headers: list<tuple<string, list<u8>>>,
-    body: option<input-stream>,
-  }
-
-  record response {
-    status: u16,
-    headers: list<tuple<string, list<u8>>>,
-    body: option<input-stream>,
-  }
-}
-
-interface http-handler {
-  use http-types.{request, response};
-  
-  handle: func(request: request) -> response;
-}
-
 world service {
   import isyswasfa:io/pipe;
-  export http-handler;
+  export wasi:http/handler@0.3.0-draft-2024-02-14;
 }
 
 world middleware {
   include service;
-  import http-handler;
-}
-
-interface incoming-handler {
-  use wasi:http/types@0.2.0.{incoming-request, outgoing-response};
- 
-  handle: func(request: incoming-request) -> outgoing-response;
-}
-
-world wasi-http-handler {
-  export incoming-handler;
+  import wasi:http/handler@0.3.0-draft-2024-02-14;  
 }

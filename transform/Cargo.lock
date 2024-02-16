@@ -41,7 +41,6 @@ dependencies = [
 name = "isyswasfa-transform"
 version = "0.1.0"
 dependencies = [
- "indexmap",
  "wit-parser",
 ]
 
