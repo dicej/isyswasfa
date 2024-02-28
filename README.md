@@ -37,8 +37,7 @@ In short, it's an experiment to see how close we can get to the Preview 3 develo
 The [test](./test) directory contains a few guest programs and corresponding host code for executing them:
 
 - [round-trip](./test/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
-- [wasi-http-handler](./test/wasi-http-handler/src/lib.rs): an example of asynchronously handling a `wasi:http/types.incoming-request`, spawning a task to stream the request body back to the client, and returning a `wasi:http/types.outgoing-request` without waiting for the stream task to complete.  Note that this does away with the `wasi:http/types.response-outparam` type, which is no longer needed with first-class async support.
-- [service](./test/service/src/lib.rs) and [middleware](./test/middleware/src/lib.rs): a pair of components which are composed to demonstrate asynchronous I/O across composed components, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use a (highly simplified) version of what we expect `wasi-http` 0.3.0 will provide: a single `request` type and a single `response` type, with no need for incoming and outgoing variations.
+- [service](./test/service/src/lib.rs) and [middleware](./test/middleware/src/lib.rs): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft-2024-02-14`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
 
 ### How it works
 

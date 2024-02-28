@@ -63,7 +63,8 @@ use {
 
 pub use {
     isyswasfa::{
-        io::poll as isyswasfa_poll_interface, isyswasfa::isyswasfa as isyswasfa_interface,
+        io::pipe as isyswasfa_pipe_interface, io::poll as isyswasfa_poll_interface,
+        isyswasfa::isyswasfa as isyswasfa_interface,
     },
     wasmtime_wasi::preview2::{
         bindings::wasi::io::{poll as wasi_poll_interface, streams as wasi_streams_interface},

@@ -67,27 +67,35 @@ impl<'a> Asyncify<'a> {
         });
 
         // TODO: make interface and function include/exclude lists configurable
-        if matches!(
-            package,
-            Some((namespace, name)) if namespace == "isyswasfa" || (namespace == "wasi" && name != "http")
-        ) {
-            return;
-        }
+        let asyncify =
+            |function: &Function| match (package, old.name.as_deref(), function.name.as_str()) {
+                (Some(("isyswasfa", _)), ..) => false,
+                (Some(("wasi", "http")), Some("handler"), _)
+                | (
+                    Some(("wasi", "http")),
+                    Some("types"),
+                    "[static]request.finish" | "[static]response.finish",
+                ) => true,
+                (Some(("wasi", _)), ..) => false,
+                _ => true,
+            };
 
         let functions = old
             .functions
             .iter()
             .flat_map(|(name, function)| {
-                if let Some((a, b)) =
-                    self.asyncify_function(function, TypeOwner::Interface(interface))
-                {
-                    vec![(a.name.clone(), a), (b.name.clone(), b)]
-                } else {
-                    vec![(
-                        name.clone(),
-                        self.map_function(function, TypeOwner::Interface(interface)),
-                    )]
+                if asyncify(function) {
+                    if let Some((a, b)) =
+                        self.asyncify_function(function, TypeOwner::Interface(interface))
+                    {
+                        return vec![(a.name.clone(), a), (b.name.clone(), b)];
+                    }
                 }
+
+                vec![(
+                    name.clone(),
+                    self.map_function(function, TypeOwner::Interface(interface)),
+                )]
             })
             .collect();
 
