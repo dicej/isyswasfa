@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "host",
+  "http",
   "test",
 ]
 exclude = [

@@ -11,23 +11,25 @@ mod test {
         },
         indexmap::IndexMap,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
-        service::wasi::http::types::{ErrorCode, HeaderError, Method, RequestOptionsError, Scheme},
+        isyswasfa_http::{
+            wasi::http::types::{Method, Scheme},
+            Fields, FieldsReceiver, Request, WasiHttpState, WasiHttpView,
+        },
         std::{
             env,
             io::Write,
             path::Path,
             pin::pin,
-            sync::{Arc, Mutex},
+            sync::{Arc, Mutex, MutexGuard},
             time::Duration,
         },
         tokio::{fs, process::Command},
         wasmtime::{
-            component::{Component, Linker, Resource, ResourceTable},
+            component::{Component, Linker, ResourceTable},
             Config, Engine, Store,
         },
         wasmtime_wasi::preview2::{
-            bindings::wasi::io::error::Error, command, InputStream, StreamError, WasiCtx,
-            WasiCtxBuilder, WasiView,
+            command, InputStream, StreamError, WasiCtx, WasiCtxBuilder, WasiView,
         },
         wit_component::ComponentEncoder,
     };
@@ -53,12 +55,7 @@ mod test {
                 "wasi:io/error": wasmtime_wasi::preview2::bindings::wasi::io::error,
                 "wasi:io/streams": wasmtime_wasi::preview2::bindings::wasi::io::streams,
                 "isyswasfa:io/pipe": isyswasfa_host::isyswasfa_pipe_interface,
-                "wasi:http/types/request": super::Request,
-                "wasi:http/types/request-options": super::RequestOptions,
-                "wasi:http/types/response": super::Response,
-                "wasi:http/types/fields": super::Fields,
-                "wasi:http/types/isyswasfa-receiver-own-trailers": super::FieldsReceiver,
-                "wasi:http/types/isyswasfa-sender-own-trailers": super::FieldsSender,
+                "wasi:http/types": isyswasfa_http::wasi::http::types,
             }
         });
     }
@@ -103,10 +100,19 @@ mod test {
         }
     }
 
+    #[derive(Clone)]
+    struct SharedTable(Arc<Mutex<ResourceTable>>);
+
+    impl WasiHttpState for SharedTable {
+        fn shared_table(&self) -> MutexGuard<ResourceTable> {
+            self.0.lock().unwrap()
+        }
+    }
+
     struct Ctx {
         wasi: WasiCtx,
         isyswasfa: IsyswasfaCtx,
-        shared_table: Arc<Mutex<ResourceTable>>,
+        shared_table: SharedTable,
     }
 
     impl WasiView for Ctx {
@@ -118,8 +124,17 @@ mod test {
         }
     }
 
+    impl WasiHttpView for Ctx {
+        fn table(&mut self) -> &mut ResourceTable {
+            self.isyswasfa.table()
+        }
+        fn shared_table(&self) -> MutexGuard<ResourceTable> {
+            self.shared_table.0.lock().unwrap()
+        }
+    }
+
     impl IsyswasfaView for Ctx {
-        type State = Arc<Mutex<ResourceTable>>;
+        type State = SharedTable;
 
         fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
             &mut self.isyswasfa
@@ -129,523 +144,9 @@ mod test {
         }
     }
 
-    #[derive(Clone)]
-    pub struct Fields(Vec<(String, Vec<u8>)>);
-
-    pub struct FieldsSender(oneshot::Sender<Fields>);
-
-    pub struct FieldsReceiver(oneshot::Receiver<Fields>);
-
-    #[derive(Default, Copy, Clone)]
-    pub struct RequestOptions {
-        connect_timeout: Option<u64>,
-        first_byte_timeout: Option<u64>,
-        between_bytes_timeout: Option<u64>,
-    }
-
-    pub struct Request {
-        method: Method,
-        scheme: Option<Scheme>,
-        path_with_query: Option<String>,
-        authority: Option<String>,
-        headers: Fields,
-        body: Option<InputStream>,
-        trailers: Option<FieldsReceiver>,
-        options: Option<RequestOptions>,
-    }
-
-    pub struct Response {
-        status_code: u16,
-        headers: Fields,
-        body: Option<InputStream>,
-        trailers: Option<FieldsReceiver>,
-    }
-
-    #[async_trait]
-    impl service::wasi::http::types::HostIsyswasfaSenderOwnTrailers for Ctx {
-        fn send(
-            &mut self,
-            this: Resource<FieldsSender>,
-            fields: Resource<Fields>,
-        ) -> wasmtime::Result<()> {
-            let (sender, fields) = {
-                let mut table = self.shared_table.lock().unwrap();
-                let sender = table.delete(this)?;
-                let fields = table.delete(fields)?;
-                (sender, fields)
-            };
-            _ = sender.0.send(fields);
-            Ok(())
-        }
-
-        fn drop(&mut self, this: Resource<FieldsSender>) -> wasmtime::Result<()> {
-            self.shared_table.lock().unwrap().delete(this)?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl service::wasi::http::types::HostIsyswasfaReceiverOwnTrailers for Ctx {
-        async fn receive(
-            state: Arc<Mutex<ResourceTable>>,
-            this: Resource<FieldsReceiver>,
-        ) -> wasmtime::Result<Option<Resource<Fields>>> {
-            let receiver = state.lock().unwrap().delete(this)?;
-            Ok(if let Ok(fields) = receiver.0.await {
-                Some(state.lock().unwrap().push(fields)?)
-            } else {
-                None
-            })
-        }
-
-        fn drop(&mut self, this: Resource<FieldsReceiver>) -> wasmtime::Result<()> {
-            self.shared_table.lock().unwrap().delete(this)?;
-            Ok(())
-        }
-    }
-
-    impl service::wasi::http::types::HostFields for Ctx {
-        fn new(&mut self) -> wasmtime::Result<Resource<Fields>> {
-            Ok(self.shared_table.lock().unwrap().push(Fields(Vec::new()))?)
-        }
-
-        fn from_list(
-            &mut self,
-            list: Vec<(String, Vec<u8>)>,
-        ) -> wasmtime::Result<Result<Resource<Fields>, HeaderError>> {
-            Ok(Ok(self.shared_table.lock().unwrap().push(Fields(list))?))
-        }
-
-        fn get(&mut self, this: Resource<Fields>, key: String) -> wasmtime::Result<Vec<Vec<u8>>> {
-            Ok(self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .0
-                .iter()
-                .filter(|(k, _)| *k == key)
-                .map(|(_, v)| v.clone())
-                .collect())
-        }
-
-        fn has(&mut self, this: Resource<Fields>, key: String) -> wasmtime::Result<bool> {
-            Ok(self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .0
-                .iter()
-                .any(|(k, _)| *k == key))
-        }
-
-        fn set(
-            &mut self,
-            this: Resource<Fields>,
-            key: String,
-            values: Vec<Vec<u8>>,
-        ) -> wasmtime::Result<Result<(), HeaderError>> {
-            let mut table = self.shared_table.lock().unwrap();
-            let fields = table.get_mut(&this)?;
-            fields.0.retain(|(k, _)| *k != key);
-            fields
-                .0
-                .extend(values.into_iter().map(|v| (key.clone(), v)));
-            Ok(Ok(()))
-        }
-
-        fn delete(
-            &mut self,
-            this: Resource<Fields>,
-            key: String,
-        ) -> wasmtime::Result<Result<(), HeaderError>> {
-            self.shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .0
-                .retain(|(k, _)| *k != key);
-            Ok(Ok(()))
-        }
-
-        fn append(
-            &mut self,
-            this: Resource<Fields>,
-            key: String,
-            value: Vec<u8>,
-        ) -> wasmtime::Result<Result<(), HeaderError>> {
-            self.shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .0
-                .push((key, value));
-            Ok(Ok(()))
-        }
-
-        fn entries(&mut self, this: Resource<Fields>) -> wasmtime::Result<Vec<(String, Vec<u8>)>> {
-            Ok(self.shared_table.lock().unwrap().get(&this)?.0.clone())
-        }
-
-        fn clone(&mut self, this: Resource<Fields>) -> wasmtime::Result<Resource<Fields>> {
-            let entries = self.shared_table.lock().unwrap().get(&this)?.0.clone();
-            Ok(self.shared_table.lock().unwrap().push(Fields(entries))?)
-        }
-
-        fn drop(&mut self, this: Resource<Fields>) -> wasmtime::Result<()> {
-            self.shared_table.lock().unwrap().delete(this)?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl service::wasi::http::types::HostRequest for Ctx {
-        fn new(
-            &mut self,
-            headers: Resource<Fields>,
-            body: Resource<InputStream>,
-            trailers: Option<Resource<FieldsReceiver>>,
-            options: Option<Resource<RequestOptions>>,
-        ) -> wasmtime::Result<Resource<Request>> {
-            let headers = self.shared_table.lock().unwrap().delete(headers)?;
-            let body = self.table().delete(body)?;
-            let trailers = if let Some(trailers) = trailers {
-                Some(self.shared_table.lock().unwrap().delete(trailers)?)
-            } else {
-                None
-            };
-            let options = if let Some(options) = options {
-                Some(self.table().delete(options)?)
-            } else {
-                None
-            };
-
-            Ok(self.shared_table.lock().unwrap().push(Request {
-                method: Method::Get,
-                scheme: None,
-                path_with_query: None,
-                authority: None,
-                headers,
-                body: Some(body),
-                trailers,
-                options,
-            })?)
-        }
-
-        fn method(&mut self, this: Resource<Request>) -> wasmtime::Result<Method> {
-            Ok(self.shared_table.lock().unwrap().get(&this)?.method.clone())
-        }
-
-        fn set_method(
-            &mut self,
-            this: Resource<Request>,
-            method: Method,
-        ) -> wasmtime::Result<Result<(), ()>> {
-            self.shared_table.lock().unwrap().get_mut(&this)?.method = method;
-            Ok(Ok(()))
-        }
-
-        fn scheme(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<Scheme>> {
-            Ok(self.shared_table.lock().unwrap().get(&this)?.scheme.clone())
-        }
-
-        fn set_scheme(
-            &mut self,
-            this: Resource<Request>,
-            scheme: Option<Scheme>,
-        ) -> wasmtime::Result<Result<(), ()>> {
-            self.shared_table.lock().unwrap().get_mut(&this)?.scheme = scheme;
-            Ok(Ok(()))
-        }
-
-        fn path_with_query(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-            Ok(self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .path_with_query
-                .clone())
-        }
-
-        fn set_path_with_query(
-            &mut self,
-            this: Resource<Request>,
-            path_with_query: Option<String>,
-        ) -> wasmtime::Result<Result<(), ()>> {
-            self.shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .path_with_query = path_with_query;
-            Ok(Ok(()))
-        }
-
-        fn authority(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-            Ok(self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .authority
-                .clone())
-        }
-
-        fn set_authority(
-            &mut self,
-            this: Resource<Request>,
-            authority: Option<String>,
-        ) -> wasmtime::Result<Result<(), ()>> {
-            self.shared_table.lock().unwrap().get_mut(&this)?.authority = authority;
-            Ok(Ok(()))
-        }
-
-        fn options(
-            &mut self,
-            this: Resource<Request>,
-        ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
-            // TODO: This should return an immutable child handle
-            let options = self.shared_table.lock().unwrap().get(&this)?.options;
-            Ok(if let Some(options) = options {
-                Some(self.table().push(options)?)
-            } else {
-                None
-            })
-        }
-
-        fn headers(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
-            // TODO: This should return an immutable child handle
-            let headers = self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .headers
-                .clone();
-            Ok(self.shared_table.lock().unwrap().push(headers)?)
-        }
-
-        fn body(
-            &mut self,
-            this: Resource<Request>,
-        ) -> wasmtime::Result<Result<Resource<InputStream>, ()>> {
-            // TODO: This should return a child handle
-            let body = self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .body
-                .take()
-                .ok_or_else(|| {
-                    anyhow!("todo: allow wasi:http/types#request.body to be called multiple times")
-                })?;
-
-            Ok(Ok(self.table().push(body)?))
-        }
-
-        async fn finish(
-            table: Arc<Mutex<ResourceTable>>,
-            this: Resource<Request>,
-        ) -> wasmtime::Result<Result<Option<Resource<Fields>>, ErrorCode>> {
-            let trailers = table.lock().unwrap().delete(this)?.trailers;
-            Ok(Ok(if let Some(trailers) = trailers {
-                if let Ok(trailers) = trailers.0.await {
-                    Some(table.lock().unwrap().push(trailers)?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }))
-        }
-
-        fn drop(&mut self, this: Resource<Request>) -> wasmtime::Result<()> {
-            self.shared_table.lock().unwrap().delete(this)?;
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl service::wasi::http::types::HostResponse for Ctx {
-        fn new(
-            &mut self,
-            headers: Resource<Fields>,
-            body: Resource<InputStream>,
-            trailers: Option<Resource<FieldsReceiver>>,
-        ) -> wasmtime::Result<Resource<Response>> {
-            let headers = self.shared_table.lock().unwrap().delete(headers)?;
-            let body = self.table().delete(body)?;
-            let trailers = if let Some(trailers) = trailers {
-                Some(self.shared_table.lock().unwrap().delete(trailers)?)
-            } else {
-                None
-            };
-
-            Ok(self.shared_table.lock().unwrap().push(Response {
-                status_code: 200,
-                headers,
-                body: Some(body),
-                trailers,
-            })?)
-        }
-
-        fn status_code(&mut self, this: Resource<Response>) -> wasmtime::Result<u16> {
-            Ok(self.shared_table.lock().unwrap().get(&this)?.status_code)
-        }
-
-        fn set_status_code(
-            &mut self,
-            this: Resource<Response>,
-            status_code: u16,
-        ) -> wasmtime::Result<Result<(), ()>> {
-            self.shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .status_code = status_code;
-            Ok(Ok(()))
-        }
-
-        fn headers(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
-            // TODO: This should return an immutable child handle
-            let headers = self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get(&this)?
-                .headers
-                .clone();
-            Ok(self.shared_table.lock().unwrap().push(headers)?)
-        }
-
-        fn body(
-            &mut self,
-            this: Resource<Response>,
-        ) -> wasmtime::Result<Result<Resource<InputStream>, ()>> {
-            // TODO: This should return a child handle
-            let body = self
-                .shared_table
-                .lock()
-                .unwrap()
-                .get_mut(&this)?
-                .body
-                .take()
-                .ok_or_else(|| {
-                    anyhow!("todo: allow wasi:http/types#response.body to be called multiple times")
-                })?;
-
-            Ok(Ok(self.table().push(body)?))
-        }
-
-        async fn finish(
-            table: Arc<Mutex<ResourceTable>>,
-            this: Resource<Response>,
-        ) -> wasmtime::Result<Result<Option<Resource<Fields>>, ErrorCode>> {
-            let trailers = table.lock().unwrap().delete(this)?.trailers;
-            Ok(Ok(if let Some(trailers) = trailers {
-                if let Ok(trailers) = trailers.0.await {
-                    Some(table.lock().unwrap().push(trailers)?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }))
-        }
-
-        fn drop(&mut self, this: Resource<Response>) -> wasmtime::Result<()> {
-            self.shared_table.lock().unwrap().delete(this)?;
-            Ok(())
-        }
-    }
-
-    impl service::wasi::http::types::HostRequestOptions for Ctx {
-        fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
-            Ok(self
-                .shared_table
-                .lock()
-                .unwrap()
-                .push(RequestOptions::default())?)
-        }
-
-        fn connect_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-        ) -> wasmtime::Result<Option<u64>> {
-            Ok(self.table().get(&this)?.connect_timeout)
-        }
-
-        fn set_connect_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-            connect_timeout: Option<u64>,
-        ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-            self.table().get_mut(&this)?.connect_timeout = connect_timeout;
-            Ok(Ok(()))
-        }
-
-        fn first_byte_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-        ) -> wasmtime::Result<Option<u64>> {
-            Ok(self.table().get(&this)?.first_byte_timeout)
-        }
-
-        fn set_first_byte_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-            first_byte_timeout: Option<u64>,
-        ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-            self.table().get_mut(&this)?.first_byte_timeout = first_byte_timeout;
-            Ok(Ok(()))
-        }
-
-        fn between_bytes_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-        ) -> wasmtime::Result<Option<u64>> {
-            Ok(self.table().get(&this)?.between_bytes_timeout)
-        }
-
-        fn set_between_bytes_timeout(
-            &mut self,
-            this: Resource<RequestOptions>,
-            between_bytes_timeout: Option<u64>,
-        ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-            self.table().get_mut(&this)?.between_bytes_timeout = between_bytes_timeout;
-            Ok(Ok(()))
-        }
-
-        fn drop(&mut self, this: Resource<RequestOptions>) -> wasmtime::Result<()> {
-            self.table().delete(this)?;
-            Ok(())
-        }
-    }
-
-    impl service::wasi::http::types::Host for Ctx {
-        fn isyswasfa_pipe_own_trailers(
-            &mut self,
-        ) -> wasmtime::Result<(Resource<FieldsSender>, Resource<FieldsReceiver>)> {
-            let (tx, rx) = oneshot::channel();
-            let mut table = self.shared_table.lock().unwrap();
-            let tx = table.push(FieldsSender(tx))?;
-            let rx = table.push(FieldsReceiver(rx))?;
-            Ok((tx, rx))
-        }
-
-        fn http_error_code(
-            &mut self,
-            _error: Resource<Error>,
-        ) -> wasmtime::Result<Option<ErrorCode>> {
-            Err(anyhow!("todo: implement wasi:http/types#http-error-code"))
-        }
-    }
-
     #[async_trait]
     impl round_trip::component::test::baz::Host for Ctx {
-        async fn foo(_state: Arc<Mutex<ResourceTable>>, s: String) -> wasmtime::Result<String> {
+        async fn foo(_state: SharedTable, s: String) -> wasmtime::Result<String> {
             tokio::time::sleep(Duration::from_millis(10)).await;
             Ok(format!("{s} - entered host - exited host"))
         }
@@ -675,7 +176,7 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                shared_table: SharedTable(Arc::new(Mutex::new(ResourceTable::new()))),
             },
         );
 
@@ -774,14 +275,14 @@ mod test {
 
         command::add_to_linker(&mut linker)?;
         isyswasfa_host::add_to_linker(&mut linker)?;
-        service::Service::add_to_linker(&mut linker, |ctx| ctx)?;
+        isyswasfa_http::add_to_linker(&mut linker)?;
 
         let mut store = Store::new(
             &engine,
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                shared_table: SharedTable(Arc::new(Mutex::new(ResourceTable::new()))),
             },
         );
 
@@ -816,48 +317,38 @@ mod test {
 
         _ = request_trailers_tx.send(Fields(trailers.clone()));
 
-        let request = store
-            .data_mut()
-            .shared_table
-            .lock()
-            .unwrap()
-            .push(Request {
-                method: Method::Post,
-                scheme: Some(Scheme::Http),
-                path_with_query: Some("/foo".into()),
-                authority: Some("localhost".into()),
-                headers: Fields(
-                    headers
-                        .clone()
-                        .into_iter()
-                        .chain(if use_compression {
-                            vec![
-                                ("content-encoding".into(), b"deflate".into()),
-                                ("accept-encoding".into(), b"deflate".into()),
-                            ]
-                        } else {
-                            Vec::new()
-                        })
-                        .collect(),
-                ),
-                body: Some(InputStream::Host(Box::new(ReceiverStream::new(
-                    request_body_rx,
-                )))),
-                trailers: Some(FieldsReceiver(request_trailers_rx)),
-                options: None,
-            })?;
+        let request = store.data_mut().shared_table().push(Request {
+            method: Method::Post,
+            scheme: Some(Scheme::Http),
+            path_with_query: Some("/foo".into()),
+            authority: Some("localhost".into()),
+            headers: Fields(
+                headers
+                    .clone()
+                    .into_iter()
+                    .chain(if use_compression {
+                        vec![
+                            ("content-encoding".into(), b"deflate".into()),
+                            ("accept-encoding".into(), b"deflate".into()),
+                        ]
+                    } else {
+                        Vec::new()
+                    })
+                    .collect(),
+            ),
+            body: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                request_body_rx,
+            )))),
+            trailers: Some(FieldsReceiver(request_trailers_rx)),
+            options: None,
+        })?;
 
         let response = service
             .wasi_http_handler()
             .call_handle(&mut store, request)
             .await??;
 
-        let mut response = store
-            .data_mut()
-            .shared_table
-            .lock()
-            .unwrap()
-            .delete(response)?;
+        let mut response = store.data_mut().shared_table().delete(response)?;
 
         assert!(response.status_code == 200);
 
