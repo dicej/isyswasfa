@@ -194,7 +194,8 @@ mod test {
                 .get(&this)?
                 .0
                 .iter()
-                .filter_map(|(k, v)| (*k == key).then(|| v.clone()))
+                .filter(|(k, _)| *k == key)
+                .map(|(_, v)| v.clone())
                 .collect())
         }
 
@@ -354,12 +355,12 @@ mod test {
 
         fn options(
             &mut self,
-            this: Resource<Request>,
+            _this: Resource<Request>,
         ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
             Err(anyhow!("todo: implement wasi:http/types#request.options"))
         }
 
-        fn headers(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
+        fn headers(&mut self, _this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
             Err(anyhow!("todo: implement wasi:http/types#request.headers"))
         }
 
@@ -440,7 +441,7 @@ mod test {
             Ok(Ok(()))
         }
 
-        fn headers(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
+        fn headers(&mut self, _this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
             Err(anyhow!("todo: implement wasi:http/types#response.headers"))
         }
 
@@ -717,30 +718,40 @@ mod test {
             request_rx
         };
 
-        let request = WasiView::table(store.data_mut()).push(Request {
-            method: Method::Post,
-            scheme: Some(Scheme::Http),
-            path_with_query: Some("/foo".into()),
-            authority: Some("localhost".into()),
-            headers: Fields(if use_compression {
-                vec![
-                    ("content-encoding".into(), b"deflate".into()),
-                    ("accept-encoding".into(), b"deflate".into()),
-                ]
-            } else {
-                Vec::new()
-            }),
-            body: Some(InputStream::Host(Box::new(ReceiverStream::new(request_rx)))),
-            trailers: None,
-            options: None,
-        })?;
+        let request = store
+            .data_mut()
+            .shared_table
+            .lock()
+            .unwrap()
+            .push(Request {
+                method: Method::Post,
+                scheme: Some(Scheme::Http),
+                path_with_query: Some("/foo".into()),
+                authority: Some("localhost".into()),
+                headers: Fields(if use_compression {
+                    vec![
+                        ("content-encoding".into(), b"deflate".into()),
+                        ("accept-encoding".into(), b"deflate".into()),
+                    ]
+                } else {
+                    Vec::new()
+                }),
+                body: Some(InputStream::Host(Box::new(ReceiverStream::new(request_rx)))),
+                trailers: None,
+                options: None,
+            })?;
 
         let response = service
             .wasi_http_handler()
             .call_handle(&mut store, request)
             .await??;
 
-        let mut response = WasiView::table(store.data_mut()).delete(response)?;
+        let mut response = store
+            .data_mut()
+            .shared_table
+            .lock()
+            .unwrap()
+            .delete(response)?;
 
         assert!(response.status_code == 200);
 

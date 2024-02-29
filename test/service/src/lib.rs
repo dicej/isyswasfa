@@ -4,7 +4,7 @@ mod bindings {
         world: "service",
         isyswasfa: "-service",
         exports: {
-            "component:test/http-handler": super::Component
+            "wasi:http/handler": super::Component
         }
     });
 }
@@ -12,8 +12,9 @@ mod bindings {
 use {
     async_trait::async_trait,
     bindings::{
-        exports::component::test::http_handler::{Guest, Request, Response},
+        exports::wasi::http::handler::Guest,
         isyswasfa::io::pipe,
+        wasi::http::types::{ErrorCode, Headers, Request, Response},
     },
 };
 
@@ -21,21 +22,16 @@ struct Component;
 
 #[async_trait(?Send)]
 impl Guest for Component {
-    async fn handle(request: Request) -> Response {
-        Response {
-            status: 200,
-            headers: Vec::new(),
-            body: request.body.map(|request_rx| {
-                let (response_tx, response_rx) = pipe::make_pipe();
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        let (response_tx, response_rx) = pipe::make_pipe();
+        let request_rx = request.body().unwrap();
 
-                isyswasfa_guest::spawn(async move {
-                    isyswasfa_guest::copy(&request_rx, &response_tx)
-                        .await
-                        .unwrap();
-                });
+        isyswasfa_guest::spawn(async move {
+            isyswasfa_guest::copy(&request_rx, &response_tx)
+                .await
+                .unwrap();
+        });
 
-                response_rx
-            }),
-        }
+        Ok(Response::new(Headers::new(), response_rx, None))
     }
 }
