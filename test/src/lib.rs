@@ -6,7 +6,6 @@ mod test {
         bytes::Bytes,
         futures::{
             channel::{mpsc, oneshot},
-            future::{self, Either},
             sink::SinkExt,
         },
         indexmap::IndexMap,
@@ -19,7 +18,6 @@ mod test {
             env,
             io::Write,
             path::Path,
-            pin::pin,
             sync::{Arc, Mutex, MutexGuard},
             time::Duration,
         },
@@ -356,7 +354,7 @@ mod test {
             unreachable!();
         };
 
-        let response_body = async move {
+        let response_body = isyswasfa_host::poll_loop_until(&mut store, async move {
             let mut buffer = Vec::new();
 
             loop {
@@ -367,34 +365,12 @@ mod test {
                     Err(e) => break Err(anyhow!("error reading response body: {e:?}")),
                 }
             }
-        };
-        let response_body = pin!(response_body);
+        })
+        .await??;
 
-        // TODO: move the following poll_loop/select logic into a reusable function:
-
-        let response_body = {
-            let poll_loop = isyswasfa_host::poll_loop(&mut store);
-            let poll_loop = pin!(poll_loop);
-
-            match future::select(poll_loop, response_body).await {
-                Either::Left((Ok(()), body)) => body.await,
-                Either::Left((Err(e), _)) => return Err(e),
-                Either::Right((body, _)) => body,
-            }?
-        };
-
-        let response_trailers = response.trailers.take().unwrap();
-
-        let response_trailers = {
-            let poll_loop = isyswasfa_host::poll_loop(&mut store);
-            let poll_loop = pin!(poll_loop);
-
-            match future::select(poll_loop, response_trailers.0).await {
-                Either::Left((Ok(()), trailers)) => trailers.await,
-                Either::Left((Err(e), _)) => return Err(e),
-                Either::Right((trailers, _)) => trailers,
-            }?
-        };
+        let response_trailers =
+            isyswasfa_host::poll_loop_until(&mut store, response.trailers.take().unwrap().0)
+                .await??;
 
         assert!(headers.iter().all(|(k0, v0)| response
             .headers

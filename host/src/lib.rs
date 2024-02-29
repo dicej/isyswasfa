@@ -47,7 +47,7 @@ use {
         collections::{HashMap, HashSet},
         future::Future,
         mem,
-        pin::Pin,
+        pin::{pin, Pin},
         sync::Arc,
         task::{Context, Poll, Wake, Waker},
     },
@@ -426,6 +426,24 @@ where
     <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
 {
     poll(store, None).await
+}
+
+pub async fn poll_loop_until<S: wasmtime::AsContextMut, T>(
+    store: S,
+    future: impl Future<Output = T>,
+) -> wasmtime::Result<T>
+where
+    <S as wasmtime::AsContext>::Data: IsyswasfaView + Send,
+{
+    let future = pin!(future);
+    let poll_loop = poll_loop(store);
+    let poll_loop = pin!(poll_loop);
+
+    Ok(match future::select(poll_loop, future).await {
+        Either::Left((Ok(()), future)) => future.await,
+        Either::Left((Err(e), _)) => return Err(e),
+        Either::Right((result, _)) => result,
+    })
 }
 
 pub async fn await_ready<S: wasmtime::AsContextMut>(
