@@ -1,6 +1,9 @@
 wasmtime::component::bindgen!({
     path: "../wit",
-    interfaces: "import wasi:http/types@0.3.0-draft-2024-02-14;",
+    interfaces: "
+      import wasi:http/types@0.3.0-draft-2024-02-14;
+      import wasi:http/handler@0.3.0-draft-2024-02-14;
+    ",
     isyswasfa: true,
     with: {
         "wasi:io/error": wasmtime_wasi::preview2::bindings::wasi::io::error,
@@ -31,8 +34,14 @@ pub trait WasiHttpView: Send + IsyswasfaView + 'static {
     fn shared_table(&self) -> MutexGuard<ResourceTable>;
 }
 
+#[async_trait]
 pub trait WasiHttpState: Send + 'static {
     fn shared_table(&self) -> MutexGuard<ResourceTable>;
+
+    async fn handle_request(
+        &self,
+        request: Resource<Request>,
+    ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>>;
 }
 
 pub struct Body {
@@ -496,9 +505,23 @@ where
     }
 }
 
+#[async_trait]
+impl<T: WasiHttpView> wasi::http::handler::Host for T
+where
+    <T as IsyswasfaView>::State: WasiHttpState,
+{
+    async fn handle(
+        state: <T as IsyswasfaView>::State,
+        request: Resource<Request>,
+    ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>> {
+        state.handle_request(request).await
+    }
+}
+
 pub fn add_to_linker<T: WasiHttpView>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     <T as IsyswasfaView>::State: WasiHttpState,
 {
-    wasi::http::types::add_to_linker(linker, |ctx| ctx)
+    wasi::http::types::add_to_linker(linker, |ctx| ctx)?;
+    wasi::http::handler::add_to_linker(linker, |ctx| ctx)
 }

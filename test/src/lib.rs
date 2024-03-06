@@ -11,8 +11,8 @@ mod test {
         indexmap::IndexMap,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
         isyswasfa_http::{
-            wasi::http::types::{Method, Scheme},
-            Body, Fields, FieldsReceiver, Request, WasiHttpState, WasiHttpView,
+            wasi::http::types::{ErrorCode, Method, Scheme},
+            Body, Fields, FieldsReceiver, Request, Response, WasiHttpState, WasiHttpView,
         },
         std::{
             env,
@@ -23,7 +23,7 @@ mod test {
         },
         tokio::{fs, process::Command},
         wasmtime::{
-            component::{Component, Linker, ResourceTable},
+            component::{Component, Linker, Resource, ResourceTable},
             Config, Engine, Store,
         },
         wasmtime_wasi::preview2::{
@@ -99,18 +99,28 @@ mod test {
     }
 
     #[derive(Clone)]
-    struct SharedTable(Arc<Mutex<ResourceTable>>);
+    struct HttpState {
+        shared_table: Arc<Mutex<ResourceTable>>,
+    }
 
-    impl WasiHttpState for SharedTable {
+    #[async_trait]
+    impl WasiHttpState for HttpState {
         fn shared_table(&self) -> MutexGuard<ResourceTable> {
-            self.0.lock().unwrap()
+            self.shared_table.lock().unwrap()
+        }
+
+        async fn handle_request(
+            &self,
+            _request: Resource<Request>,
+        ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>> {
+            todo!()
         }
     }
 
     struct Ctx {
         wasi: WasiCtx,
         isyswasfa: IsyswasfaCtx,
-        shared_table: SharedTable,
+        http_state: HttpState,
     }
 
     impl WasiView for Ctx {
@@ -127,24 +137,24 @@ mod test {
             self.isyswasfa.table()
         }
         fn shared_table(&self) -> MutexGuard<ResourceTable> {
-            self.shared_table.0.lock().unwrap()
+            self.http_state.shared_table.lock().unwrap()
         }
     }
 
     impl IsyswasfaView for Ctx {
-        type State = SharedTable;
+        type State = HttpState;
 
         fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
             &mut self.isyswasfa
         }
         fn state(&self) -> Self::State {
-            self.shared_table.clone()
+            self.http_state.clone()
         }
     }
 
     #[async_trait]
     impl round_trip::component::test::baz::Host for Ctx {
-        async fn foo(_state: SharedTable, s: String) -> wasmtime::Result<String> {
+        async fn foo(_state: HttpState, s: String) -> wasmtime::Result<String> {
             tokio::time::sleep(Duration::from_millis(10)).await;
             Ok(format!("{s} - entered host - exited host"))
         }
@@ -174,7 +184,9 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                shared_table: SharedTable(Arc::new(Mutex::new(ResourceTable::new()))),
+                http_state: HttpState {
+                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                },
             },
         );
 
@@ -280,7 +292,9 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                shared_table: SharedTable(Arc::new(Mutex::new(ResourceTable::new()))),
+                http_state: HttpState {
+                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                },
             },
         );
 
