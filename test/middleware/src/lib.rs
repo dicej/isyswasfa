@@ -16,7 +16,9 @@ use {
         isyswasfa::io::pipe,
         wasi::http::{
             handler,
-            types::{self, ErrorCode, Headers, IsyswasfaSenderOwnTrailers, Request, Response},
+            types::{
+                self, Body, ErrorCode, Headers, IsyswasfaSenderOwnTrailers, Request, Response,
+            },
         },
     },
     flate2::{
@@ -53,48 +55,48 @@ impl Guest for Component {
             }
             _ => true,
         });
-        let body_rx = request.body().unwrap();
+        let body = Request::consume(request);
 
-        // Next, spawn a task to pipe (and optionally decode) the original request body and trailers into a new
-        // request we'll create below.  This will run concurrently with any code in the imported
-        // `wasi:http/handler`.
-        let (trailers_tx, trailers_rx) = types::isyswasfa_pipe_own_trailers();
-        let (pipe_tx, pipe_rx) = pipe::make_pipe();
+        let body = if content_deflated {
+            // Next, spawn a task to pipe and decode the original request body and trailers into a new request
+            // we'll create below.  This will run concurrently with any code in the imported `wasi:http/handler`.
+            let (trailers_tx, trailers_rx) = types::isyswasfa_pipe_own_trailers();
+            let (pipe_tx, pipe_rx) = pipe::make_pipe();
 
-        isyswasfa_guest::spawn(async move {
-            if content_deflated {
-                let mut decoder = DeflateDecoder::new(Vec::new());
+            isyswasfa_guest::spawn(async move {
+                {
+                    let body_rx = body.stream().unwrap();
 
-                while let Some(chunk) = isyswasfa_guest::read(&body_rx, 64 * 1024).await.unwrap() {
-                    decoder.write_all(&chunk).unwrap();
-                    isyswasfa_guest::write_all(&pipe_tx, decoder.get_ref())
+                    let mut decoder = DeflateDecoder::new(Vec::new());
+
+                    while let Some(chunk) =
+                        isyswasfa_guest::read(&body_rx, 64 * 1024).await.unwrap()
+                    {
+                        decoder.write_all(&chunk).unwrap();
+                        isyswasfa_guest::write_all(&pipe_tx, decoder.get_ref())
+                            .await
+                            .unwrap();
+                        decoder.get_mut().clear()
+                    }
+
+                    isyswasfa_guest::write_all(&pipe_tx, &decoder.finish().unwrap())
                         .await
                         .unwrap();
-                    decoder.get_mut().clear()
                 }
 
-                isyswasfa_guest::write_all(&pipe_tx, &decoder.finish().unwrap())
-                    .await
-                    .unwrap();
-            } else {
-                isyswasfa_guest::copy(&body_rx, &pipe_tx).await.unwrap();
-            }
+                if let Some(trailers) = Body::finish(body).await.unwrap() {
+                    IsyswasfaSenderOwnTrailers::send(trailers_tx, trailers);
+                }
+            });
 
-            drop(body_rx);
+            Body::new(pipe_rx, Some(trailers_rx))
+        } else {
+            body
+        };
 
-            if let Some(trailers) = Request::finish(request).await.unwrap() {
-                IsyswasfaSenderOwnTrailers::send(trailers_tx, trailers);
-            }
-        });
-
-        // While the above task is running, synthesize a request from the parts collected above and pass it to the
-        // imported `wasi:http/handler`.
-        let my_request = Request::new(
-            Headers::from_list(&headers).unwrap(),
-            pipe_rx,
-            Some(trailers_rx),
-            None,
-        );
+        // While the above task (if any) is running, synthesize a request from the parts collected above and pass
+        // it to the imported `wasi:http/handler`.
+        let my_request = Request::new(Headers::from_list(&headers).unwrap(), body, None);
         my_request.set_method(&method).unwrap();
         my_request.set_scheme(scheme.as_ref()).unwrap();
         my_request
@@ -110,46 +112,49 @@ impl Guest for Component {
         if accept_deflated {
             headers.push(("content-encoding".into(), b"deflate".into()));
         }
-        let body_rx = response.body().unwrap();
+        let body = Response::consume(response);
 
-        // Spawn another task; this one is to pipe (and optionally encode) the original response body and trailers
-        // into a new response we'll create below.  This will run concurrently with the caller's code (i.e. it
-        // won't necessarily complete before we return a value).
-        let (trailers_tx, trailers_rx) = types::isyswasfa_pipe_own_trailers();
-        let (pipe_tx, pipe_rx) = pipe::make_pipe();
+        let body = if accept_deflated {
+            // Spawn another task; this one is to pipe (and optionally encode) the original response body and
+            // trailers into a new response we'll create below.  This will run concurrently with the caller's code
+            // (i.e. it won't necessarily complete before we return a value).
+            let (trailers_tx, trailers_rx) = types::isyswasfa_pipe_own_trailers();
+            let (pipe_tx, pipe_rx) = pipe::make_pipe();
 
-        isyswasfa_guest::spawn(async move {
-            if accept_deflated {
-                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+            isyswasfa_guest::spawn(async move {
+                {
+                    let body_rx = body.stream().unwrap();
 
-                while let Some(chunk) = isyswasfa_guest::read(&body_rx, 64 * 1024).await.unwrap() {
-                    encoder.write_all(&chunk).unwrap();
-                    isyswasfa_guest::write_all(&pipe_tx, encoder.get_ref())
+                    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+
+                    while let Some(chunk) =
+                        isyswasfa_guest::read(&body_rx, 64 * 1024).await.unwrap()
+                    {
+                        encoder.write_all(&chunk).unwrap();
+                        isyswasfa_guest::write_all(&pipe_tx, encoder.get_ref())
+                            .await
+                            .unwrap();
+                        encoder.get_mut().clear()
+                    }
+
+                    isyswasfa_guest::write_all(&pipe_tx, &encoder.finish().unwrap())
                         .await
                         .unwrap();
-                    encoder.get_mut().clear()
                 }
 
-                isyswasfa_guest::write_all(&pipe_tx, &encoder.finish().unwrap())
-                    .await
-                    .unwrap();
-            } else {
-                isyswasfa_guest::copy(&body_rx, &pipe_tx).await.unwrap();
-            }
+                if let Some(trailers) = Body::finish(body).await.unwrap() {
+                    IsyswasfaSenderOwnTrailers::send(trailers_tx, trailers);
+                }
+            });
 
-            drop(body_rx);
+            Body::new(pipe_rx, Some(trailers_rx))
+        } else {
+            body
+        };
 
-            if let Some(trailers) = Response::finish(response).await.unwrap() {
-                IsyswasfaSenderOwnTrailers::send(trailers_tx, trailers);
-            }
-        });
-
-        // While the above task is running, synthesize a response from the parts collected above and return it.
-        let my_response = Response::new(
-            Headers::from_list(&headers).unwrap(),
-            pipe_rx,
-            Some(trailers_rx),
-        );
+        // While the above tasks (if any) are running, synthesize a response from the parts collected above and
+        // return it.
+        let my_response = Response::new(Headers::from_list(&headers).unwrap(), body);
         my_response.set_status_code(status_code).unwrap();
 
         Ok(my_response)

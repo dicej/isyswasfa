@@ -5,6 +5,7 @@ wasmtime::component::bindgen!({
     with: {
         "wasi:io/error": wasmtime_wasi::preview2::bindings::wasi::io::error,
         "wasi:io/streams": wasmtime_wasi::preview2::bindings::wasi::io::streams,
+        "wasi:http/types/body": Body,
         "wasi:http/types/request": Request,
         "wasi:http/types/request-options": RequestOptions,
         "wasi:http/types/response": Response,
@@ -34,6 +35,11 @@ pub trait WasiHttpState: Send + 'static {
     fn shared_table(&self) -> MutexGuard<ResourceTable>;
 }
 
+pub struct Body {
+    pub stream: Option<InputStream>,
+    pub trailers: Option<FieldsReceiver>,
+}
+
 #[derive(Clone)]
 pub struct Fields(pub Vec<(String, Vec<u8>)>);
 
@@ -54,16 +60,14 @@ pub struct Request {
     pub path_with_query: Option<String>,
     pub authority: Option<String>,
     pub headers: Fields,
-    pub body: Option<InputStream>,
-    pub trailers: Option<FieldsReceiver>,
+    pub body: Body,
     pub options: Option<RequestOptions>,
 }
 
 pub struct Response {
     pub status_code: u16,
     pub headers: Fields,
-    pub body: Option<InputStream>,
-    pub trailers: Option<FieldsReceiver>,
+    pub body: Body,
 }
 
 impl<T: WasiHttpView> wasi::http::types::HostIsyswasfaSenderOwnTrailers for T {
@@ -196,6 +200,67 @@ impl<T: WasiHttpView> wasi::http::types::HostFields for T {
 }
 
 #[async_trait]
+impl<T: WasiHttpView> wasi::http::types::HostBody for T
+where
+    <T as IsyswasfaView>::State: WasiHttpState,
+{
+    fn new(
+        &mut self,
+        stream: Resource<InputStream>,
+        trailers: Option<Resource<FieldsReceiver>>,
+    ) -> wasmtime::Result<Resource<Body>> {
+        let stream = self.table().delete(stream)?;
+        let trailers = if let Some(trailers) = trailers {
+            Some(self.shared_table().delete(trailers)?)
+        } else {
+            None
+        };
+
+        Ok(self.shared_table().push(Body {
+            stream: Some(stream),
+            trailers,
+        })?)
+    }
+
+    fn stream(
+        &mut self,
+        this: Resource<Body>,
+    ) -> wasmtime::Result<Result<Resource<InputStream>, ()>> {
+        // TODO: This should return a child handle
+        let stream = self
+            .shared_table()
+            .get_mut(&this)?
+            .stream
+            .take()
+            .ok_or_else(|| {
+                anyhow!("todo: allow wasi:http/types#body.stream to be called multiple times")
+            })?;
+
+        Ok(Ok(self.table().push(stream)?))
+    }
+
+    async fn finish(
+        state: <T as IsyswasfaView>::State,
+        this: Resource<Body>,
+    ) -> wasmtime::Result<Result<Option<Resource<Fields>>, ErrorCode>> {
+        let trailers = state.shared_table().delete(this)?.trailers;
+        Ok(Ok(if let Some(trailers) = trailers {
+            if let Ok(trailers) = trailers.0.await {
+                Some(state.shared_table().push(trailers)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        }))
+    }
+
+    fn drop(&mut self, this: Resource<Body>) -> wasmtime::Result<()> {
+        self.shared_table().delete(this)?;
+        Ok(())
+    }
+}
+
 impl<T: WasiHttpView> wasi::http::types::HostRequest for T
 where
     <T as IsyswasfaView>::State: WasiHttpState,
@@ -203,37 +268,30 @@ where
     fn new(
         &mut self,
         headers: Resource<Fields>,
-        body: Resource<InputStream>,
-        trailers: Option<Resource<FieldsReceiver>>,
+        body: Resource<Body>,
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<Resource<Request>> {
         let headers = self.shared_table().delete(headers)?;
-        let body = self.table().delete(body)?;
-        let trailers = if let Some(trailers) = trailers {
-            Some(self.shared_table().delete(trailers)?)
-        } else {
-            None
-        };
+        let body = self.shared_table().delete(body)?;
         let options = if let Some(options) = options {
             Some(self.table().delete(options)?)
         } else {
             None
         };
 
-        Ok(self.shared_table().push(Request {
+        Ok(self.table().push(Request {
             method: Method::Get,
             scheme: None,
             path_with_query: None,
             authority: None,
             headers,
-            body: Some(body),
-            trailers,
+            body,
             options,
         })?)
     }
 
     fn method(&mut self, this: Resource<Request>) -> wasmtime::Result<Method> {
-        Ok(self.shared_table().get(&this)?.method.clone())
+        Ok(self.table().get(&this)?.method.clone())
     }
 
     fn set_method(
@@ -241,12 +299,12 @@ where
         this: Resource<Request>,
         method: Method,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.shared_table().get_mut(&this)?.method = method;
+        self.table().get_mut(&this)?.method = method;
         Ok(Ok(()))
     }
 
     fn scheme(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<Scheme>> {
-        Ok(self.shared_table().get(&this)?.scheme.clone())
+        Ok(self.table().get(&this)?.scheme.clone())
     }
 
     fn set_scheme(
@@ -254,12 +312,12 @@ where
         this: Resource<Request>,
         scheme: Option<Scheme>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.shared_table().get_mut(&this)?.scheme = scheme;
+        self.table().get_mut(&this)?.scheme = scheme;
         Ok(Ok(()))
     }
 
     fn path_with_query(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-        Ok(self.shared_table().get(&this)?.path_with_query.clone())
+        Ok(self.table().get(&this)?.path_with_query.clone())
     }
 
     fn set_path_with_query(
@@ -267,12 +325,12 @@ where
         this: Resource<Request>,
         path_with_query: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.shared_table().get_mut(&this)?.path_with_query = path_with_query;
+        self.table().get_mut(&this)?.path_with_query = path_with_query;
         Ok(Ok(()))
     }
 
     fn authority(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-        Ok(self.shared_table().get(&this)?.authority.clone())
+        Ok(self.table().get(&this)?.authority.clone())
     }
 
     fn set_authority(
@@ -280,7 +338,7 @@ where
         this: Resource<Request>,
         authority: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.shared_table().get_mut(&this)?.authority = authority;
+        self.table().get_mut(&this)?.authority = authority;
         Ok(Ok(()))
     }
 
@@ -289,7 +347,7 @@ where
         this: Resource<Request>,
     ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
         // TODO: This should return an immutable child handle
-        let options = self.shared_table().get(&this)?.options;
+        let options = self.table().get(&this)?.options;
         Ok(if let Some(options) = options {
             Some(self.table().push(options)?)
         } else {
@@ -299,50 +357,21 @@ where
 
     fn headers(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.shared_table().get(&this)?.headers.clone();
+        let headers = self.table().get(&this)?.headers.clone();
         Ok(self.shared_table().push(headers)?)
     }
 
-    fn body(
-        &mut self,
-        this: Resource<Request>,
-    ) -> wasmtime::Result<Result<Resource<InputStream>, ()>> {
-        // TODO: This should return a child handle
-        let body = self
-            .shared_table()
-            .get_mut(&this)?
-            .body
-            .take()
-            .ok_or_else(|| {
-                anyhow!("todo: allow wasi:http/types#request.body to be called multiple times")
-            })?;
-
-        Ok(Ok(self.table().push(body)?))
-    }
-
-    async fn finish(
-        state: <T as IsyswasfaView>::State,
-        this: Resource<Request>,
-    ) -> wasmtime::Result<Result<Option<Resource<Fields>>, ErrorCode>> {
-        let trailers = state.shared_table().delete(this)?.trailers;
-        Ok(Ok(if let Some(trailers) = trailers {
-            if let Ok(trailers) = trailers.0.await {
-                Some(state.shared_table().push(trailers)?)
-            } else {
-                None
-            }
-        } else {
-            None
-        }))
+    fn consume(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Body>> {
+        let body = self.table().delete(this)?.body;
+        Ok(self.shared_table().push(body)?)
     }
 
     fn drop(&mut self, this: Resource<Request>) -> wasmtime::Result<()> {
-        self.shared_table().delete(this)?;
+        self.table().delete(this)?;
         Ok(())
     }
 }
 
-#[async_trait]
 impl<T: WasiHttpView> wasi::http::types::HostResponse for T
 where
     <T as IsyswasfaView>::State: WasiHttpState,
@@ -350,27 +379,20 @@ where
     fn new(
         &mut self,
         headers: Resource<Fields>,
-        body: Resource<InputStream>,
-        trailers: Option<Resource<FieldsReceiver>>,
+        body: Resource<Body>,
     ) -> wasmtime::Result<Resource<Response>> {
         let headers = self.shared_table().delete(headers)?;
-        let body = self.table().delete(body)?;
-        let trailers = if let Some(trailers) = trailers {
-            Some(self.shared_table().delete(trailers)?)
-        } else {
-            None
-        };
+        let body = self.shared_table().delete(body)?;
 
-        Ok(self.shared_table().push(Response {
+        Ok(self.table().push(Response {
             status_code: 200,
             headers,
-            body: Some(body),
-            trailers,
+            body,
         })?)
     }
 
     fn status_code(&mut self, this: Resource<Response>) -> wasmtime::Result<u16> {
-        Ok(self.shared_table().get(&this)?.status_code)
+        Ok(self.table().get(&this)?.status_code)
     }
 
     fn set_status_code(
@@ -378,58 +400,30 @@ where
         this: Resource<Response>,
         status_code: u16,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.shared_table().get_mut(&this)?.status_code = status_code;
+        self.table().get_mut(&this)?.status_code = status_code;
         Ok(Ok(()))
     }
 
     fn headers(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.shared_table().get(&this)?.headers.clone();
+        let headers = self.table().get(&this)?.headers.clone();
         Ok(self.shared_table().push(headers)?)
     }
 
-    fn body(
-        &mut self,
-        this: Resource<Response>,
-    ) -> wasmtime::Result<Result<Resource<InputStream>, ()>> {
-        // TODO: This should return a child handle
-        let body = self
-            .shared_table()
-            .get_mut(&this)?
-            .body
-            .take()
-            .ok_or_else(|| {
-                anyhow!("todo: allow wasi:http/types#response.body to be called multiple times")
-            })?;
-
-        Ok(Ok(self.table().push(body)?))
-    }
-
-    async fn finish(
-        state: <T as IsyswasfaView>::State,
-        this: Resource<Response>,
-    ) -> wasmtime::Result<Result<Option<Resource<Fields>>, ErrorCode>> {
-        let trailers = state.shared_table().delete(this)?.trailers;
-        Ok(Ok(if let Some(trailers) = trailers {
-            if let Ok(trailers) = trailers.0.await {
-                Some(state.shared_table().push(trailers)?)
-            } else {
-                None
-            }
-        } else {
-            None
-        }))
+    fn consume(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Body>> {
+        let body = self.table().delete(this)?.body;
+        Ok(self.shared_table().push(body)?)
     }
 
     fn drop(&mut self, this: Resource<Response>) -> wasmtime::Result<()> {
-        self.shared_table().delete(this)?;
+        self.table().delete(this)?;
         Ok(())
     }
 }
 
 impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
     fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
-        Ok(self.shared_table().push(RequestOptions::default())?)
+        Ok(self.table().push(RequestOptions::default())?)
     }
 
     fn connect_timeout(&mut self, this: Resource<RequestOptions>) -> wasmtime::Result<Option<u64>> {

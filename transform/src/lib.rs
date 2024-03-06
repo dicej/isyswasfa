@@ -72,11 +72,7 @@ impl<'a> Asyncify<'a> {
             |function: &Function| match (package, old.name.as_deref(), function.name.as_str()) {
                 (Some(("isyswasfa", _)), ..) => false,
                 (Some(("wasi", "http")), Some("handler"), _)
-                | (
-                    Some(("wasi", "http")),
-                    Some("types"),
-                    "[static]request.finish" | "[static]response.finish",
-                ) => true,
+                | (Some(("wasi", "http")), Some("types"), "[static]body.finish") => true,
                 (Some(("wasi", _)), ..) => false,
                 _ => true,
             };

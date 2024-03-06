@@ -12,7 +12,7 @@ mod test {
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView},
         isyswasfa_http::{
             wasi::http::types::{Method, Scheme},
-            Fields, FieldsReceiver, Request, WasiHttpState, WasiHttpView,
+            Body, Fields, FieldsReceiver, Request, WasiHttpState, WasiHttpView,
         },
         std::{
             env,
@@ -315,15 +315,15 @@ mod test {
 
         _ = request_trailers_tx.send(Fields(trailers.clone()));
 
-        let request = store.data_mut().shared_table().push(Request {
+        let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Post,
             scheme: Some(Scheme::Http),
             path_with_query: Some("/foo".into()),
             authority: Some("localhost".into()),
             headers: Fields(
                 headers
-                    .clone()
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .chain(if use_compression {
                         vec![
                             ("content-encoding".into(), b"deflate".into()),
@@ -334,10 +334,12 @@ mod test {
                     })
                     .collect(),
             ),
-            body: Some(InputStream::Host(Box::new(ReceiverStream::new(
-                request_body_rx,
-            )))),
-            trailers: Some(FieldsReceiver(request_trailers_rx)),
+            body: Body {
+                stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                    request_body_rx,
+                )))),
+                trailers: Some(FieldsReceiver(request_trailers_rx)),
+            },
             options: None,
         })?;
 
@@ -346,11 +348,17 @@ mod test {
             .call_handle(&mut store, request)
             .await??;
 
-        let mut response = store.data_mut().shared_table().delete(response)?;
+        let mut response = WasiHttpView::table(store.data_mut()).delete(response)?;
 
         assert!(response.status_code == 200);
 
-        let InputStream::Host(mut response_rx) = response.body.take().unwrap() else {
+        assert!(headers.iter().all(|(k0, v0)| response
+            .headers
+            .0
+            .iter()
+            .any(|(k1, v1)| k0 == k1 && v0 == v1)));
+
+        let InputStream::Host(mut response_rx) = response.body.stream.take().unwrap() else {
             unreachable!();
         };
 
@@ -368,16 +376,6 @@ mod test {
         })
         .await??;
 
-        let response_trailers =
-            isyswasfa_host::poll_loop_until(&mut store, response.trailers.take().unwrap().0)
-                .await??;
-
-        assert!(headers.iter().all(|(k0, v0)| response
-            .headers
-            .0
-            .iter()
-            .any(|(k1, v1)| k0 == k1 && v0 == v1)));
-
         let response_body = if use_compression {
             assert!(response.headers.0.iter().any(|(k, v)| matches!(
                 (k.as_str(), v.as_slice()),
@@ -392,6 +390,10 @@ mod test {
         };
 
         assert_eq!(body as &[_], &response_body);
+
+        let response_trailers =
+            isyswasfa_host::poll_loop_until(&mut store, response.body.trailers.take().unwrap().0)
+                .await??;
 
         assert!(trailers.iter().all(|(k0, v0)| response_trailers
             .0
