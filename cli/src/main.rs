@@ -206,18 +206,13 @@ async fn handle_request(
         Ok::<_, Error>(None)
     };
 
-    struct CallComplete {
-        response: Resource<Response>,
-        store: Store<Ctx>,
-    }
-
     let call_handle = async move {
         let response = service
             .wasi_http_handler()
             .call_handle(&mut store, wasi_request)
             .await??;
 
-        Ok::<_, Error>(Some(CallComplete { response, store }))
+        Ok::<_, Error>(Some((response, store)))
     };
 
     let mut futures = FuturesUnordered::new();
@@ -225,11 +220,7 @@ async fn handle_request(
     futures.push(call_handle.boxed());
 
     while let Some(event) = futures.try_next().await? {
-        if let Some(CallComplete {
-            response,
-            mut store,
-        }) = event
-        {
+        if let Some((response, mut store)) = event {
             let response = store.data_mut().shared_table().delete(response)?;
 
             let mut body = response.body;

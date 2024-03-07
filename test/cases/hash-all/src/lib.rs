@@ -33,7 +33,8 @@ struct Component;
 
 #[async_trait(?Send)]
 impl Guest for Component {
-    /// Return a response which echoes the request headers, body, and trailers.
+    /// Send outgoing GET requests concurrently to the URLs specified as headers and stream the hashes of the
+    /// response bodies as they arrive.
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         let (response_body_tx, response_body_rx) = pipe::make_pipe();
         let mut response_body_tx = isyswasfa_guest::sink(response_body_tx);

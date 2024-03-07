@@ -103,6 +103,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "isyswasfa-guest",
+ "url",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

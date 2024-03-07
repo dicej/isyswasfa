@@ -3,13 +3,14 @@
 #[cfg(test)]
 mod test {
     use {
-        anyhow::{anyhow, bail, Result},
+        anyhow::{anyhow, bail, Error, Result},
         async_trait::async_trait,
         bytes::Bytes,
         futures::{
             channel::{mpsc, oneshot},
             future::{BoxFuture, FutureExt},
             sink::SinkExt,
+            stream::{FuturesUnordered, TryStreamExt},
         },
         indexmap::IndexMap,
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView, ReceiverStream},
@@ -21,7 +22,7 @@ mod test {
         std::{
             collections::HashMap,
             io::Write,
-            str,
+            iter, str,
             sync::{Arc, Mutex, MutexGuard},
             time::Duration,
         },
@@ -597,6 +598,225 @@ mod test {
                 hash,
                 base64::engine::general_purpose::STANDARD_NO_PAD.encode(hasher.finalize())
             );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn echo() -> Result<()> {
+        echo_test("/echo", None).await
+    }
+
+    #[tokio::test]
+    async fn double_echo() -> Result<()> {
+        let send_request = Arc::new({
+            move |state: &HttpState, request: Resource<Request>| {
+                let table = state.shared_table.clone();
+
+                async move {
+                    let request = table.lock().unwrap().delete(request)?;
+
+                    let (status_code, body) = if let (Method::Post, Some("/echo")) =
+                        (request.method, request.path_with_query.as_deref())
+                    {
+                        (200, request.body)
+                    } else {
+                        (
+                            405,
+                            Body {
+                                stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                                    mpsc::channel(1).1,
+                                )))),
+                                trailers: None,
+                            },
+                        )
+                    };
+
+                    Ok(Ok(table.lock().unwrap().push(Response {
+                        status_code,
+                        headers: Fields(
+                            request
+                                .headers
+                                .0
+                                .into_iter()
+                                .filter(|(k, _)| k == "content-type")
+                                .collect(),
+                        ),
+                        body,
+                    })?))
+                }
+                .boxed()
+            }
+        });
+
+        echo_test("/double-echo", Some(("/echo", send_request))).await
+    }
+
+    async fn echo_test(uri: &str, double: Option<(&str, RequestSender)>) -> Result<()> {
+        let body = &{
+            // A sorta-random-ish megabyte
+            let mut n = 0_u8;
+            iter::repeat_with(move || {
+                n = n.wrapping_add(251);
+                n
+            })
+            .take(1024 * 1024)
+            .collect::<Vec<_>>()
+        };
+
+        let component_bytes = build_component("echo").await?;
+
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        config.async_support(true);
+
+        let engine = Engine::new(&config)?;
+
+        let component = Component::new(&engine, &component_bytes)?;
+
+        let mut linker = Linker::new(&engine);
+
+        command::add_to_linker(&mut linker)?;
+        isyswasfa_host::add_to_linker(&mut linker)?;
+        isyswasfa_http::add_to_linker(&mut linker)?;
+
+        let url_header = double.as_ref().map(|(s, _)| *s);
+        let send_request = double.map(|(_, v)| v);
+
+        let mut store = Store::new(
+            &engine,
+            Ctx {
+                wasi: WasiCtxBuilder::new().inherit_stdio().build(),
+                isyswasfa: IsyswasfaCtx::new(),
+                http_state: HttpState {
+                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                    send_request,
+                },
+            },
+        );
+
+        let (proxy, instance) =
+            proxy::Proxy::instantiate_async(&mut store, &component, &linker).await?;
+
+        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+
+        let (mut request_body_tx, request_body_rx) = mpsc::channel(1);
+
+        enum Event {
+            RequestBody,
+            Call {
+                response: Resource<Response>,
+                store: Store<Ctx>,
+            },
+            ResponseBody(Vec<u8>),
+        }
+
+        let pipe_request_body = async move {
+            let chunks = body.chunks(16 * 1024).map(Bytes::copy_from_slice);
+
+            for chunk in chunks {
+                request_body_tx.send(chunk).await?;
+            }
+
+            Ok::<_, Error>(Event::RequestBody)
+        };
+
+        let request = store.data_mut().shared_table().push(Request {
+            method: Method::Post,
+            scheme: Some(Scheme::Http),
+            path_with_query: Some(uri.into()),
+            authority: Some("localhost".into()),
+            headers: Fields(
+                url_header
+                    .into_iter()
+                    .map(|key| ("url".into(), format!("http://localhost{key}").into_bytes()))
+                    .chain(iter::once((
+                        "content-type".into(),
+                        b"application/octet-stream".into(),
+                    )))
+                    .collect(),
+            ),
+            body: Body {
+                stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                    request_body_rx,
+                )))),
+                trailers: None,
+            },
+            options: None,
+        })?;
+
+        let call_handle = async move {
+            let response = proxy
+                .wasi_http_handler()
+                .call_handle(&mut store, request)
+                .await??;
+
+            Ok::<_, Error>(Event::Call { response, store })
+        };
+
+        let mut futures = FuturesUnordered::new();
+        futures.push(pipe_request_body.boxed());
+        futures.push(call_handle.boxed());
+
+        while let Some(event) = futures.try_next().await? {
+            match event {
+                Event::RequestBody => {}
+                Event::Call {
+                    response,
+                    mut store,
+                } => {
+                    let mut response = store.data_mut().shared_table().delete(response)?;
+
+                    assert!(response.status_code == 200);
+
+                    assert!(response.headers.0.iter().any(|(k, v)| matches!(
+                        (k.as_str(), v.as_slice()),
+                        ("content-type", b"application/octet-stream")
+                    )));
+
+                    let InputStream::Host(mut response_rx) = response.body.stream.take().unwrap()
+                    else {
+                        unreachable!();
+                    };
+
+                    futures.push(
+                        async move {
+                            isyswasfa_host::poll_loop_until(&mut store, async move {
+                                let mut buffer = Vec::new();
+
+                                loop {
+                                    match response_rx.read(1024) {
+                                        Ok(bytes) if bytes.is_empty() => response_rx.ready().await,
+                                        Ok(bytes) => buffer.extend_from_slice(&bytes),
+                                        Err(StreamError::Closed) => {
+                                            break Ok::<_, Error>(Event::ResponseBody(buffer))
+                                        }
+                                        Err(e) => {
+                                            break Err(anyhow!(
+                                                "error reading response body: {e:?}"
+                                            ))
+                                        }
+                                    }
+                                }
+                            })
+                            .await?
+                        }
+                        .boxed(),
+                    );
+                }
+                Event::ResponseBody(response_body) => {
+                    if body != &response_body {
+                        panic!(
+                            "body content mismatch (expected length {}; actual length {})",
+                            body.len(),
+                            response_body.len()
+                        );
+                    }
+
+                    break;
+                }
+            }
         }
 
         Ok(())
