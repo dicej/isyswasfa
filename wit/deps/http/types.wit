@@ -243,16 +243,6 @@ interface types {
   
     /// Returns the contents of the body, as a stream of bytes.
     ///
-    /// The returned `stream` is a child: it must be dropped before the parent
-    /// `body` is dropped, or consumed by `body.finish`.
-    ///
-    /// This invariant ensures that the implementation can determine whether the
-    /// user is consuming the contents of the body, waiting on the trailers to
-    /// be ready, or neither. This allows for network backpressure is to be
-    /// applied when the user is consuming the body, and for that backpressure
-    /// to not inhibit delivery of the trailers if the user does not read the
-    /// entire body.
-    ///
     /// This function may be called multiple times as long as any `stream`s
     /// returned by previous calls have been dropped first.
     %stream: func() -> result<stream<u8>>;

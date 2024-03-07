@@ -65,7 +65,7 @@ mod test {
             path
         } else {
             let adapter_url = "https://github.com/bytecodealliance/wasmtime/releases\
-                               /download/v17.0.0/wasi_snapshot_preview1.reactor.wasm";
+                               /download/v18.0.0/wasi_snapshot_preview1.reactor.wasm";
 
             let adapter_path = &format!("{src_path}/target/wasi_snapshot_preview1.reactor.wasm");
 
