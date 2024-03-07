@@ -12,7 +12,7 @@ wasmtime::component::bindgen!({
 });
 
 use {
-    anyhow::{anyhow, Error, Result},
+    anyhow::{anyhow, bail, Error, Result},
     async_trait::async_trait,
     bytes::Bytes,
     clap::Parser,
@@ -20,7 +20,7 @@ use {
         channel::{mpsc, oneshot},
         future::FutureExt,
         sink::SinkExt,
-        stream::{FuturesUnordered, TryStreamExt},
+        stream::{FuturesUnordered, StreamExt, TryStreamExt},
     },
     http_body_util::{combinators::BoxBody, BodyExt, StreamBody},
     hyper::{body::Frame, server::conn::http1, service},
@@ -43,6 +43,8 @@ use {
     },
     wasmtime_wasi::preview2::{command, StreamError, WasiCtx, WasiCtxBuilder, WasiView},
 };
+
+const MAX_READ_SIZE: usize = 64 * 1024;
 
 /// A utility to experiment with WASI 0.3.0-style composable concurrency
 #[derive(clap::Parser, Debug)]
@@ -69,6 +71,7 @@ struct Serve {
 #[derive(Clone)]
 struct HttpState {
     shared_table: Arc<Mutex<ResourceTable>>,
+    client: Arc<reqwest::Client>,
 }
 
 #[async_trait]
@@ -79,9 +82,125 @@ impl WasiHttpState for HttpState {
 
     async fn handle_request(
         &self,
-        _request: Resource<Request>,
+        request: Resource<Request>,
     ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>> {
-        todo!()
+        let mut request = self.shared_table().delete(request)?;
+
+        if request.options.is_some() {
+            bail!("todo: handle outgoing request options");
+        }
+
+        if request.body.trailers.is_some() {
+            bail!("todo: handle outgoing request trailers");
+        }
+
+        let method = match request.method {
+            Method::Get => reqwest::Method::GET,
+            Method::Head => reqwest::Method::HEAD,
+            Method::Post => reqwest::Method::POST,
+            Method::Put => reqwest::Method::PUT,
+            Method::Delete => reqwest::Method::DELETE,
+            Method::Connect => reqwest::Method::CONNECT,
+            Method::Options => reqwest::Method::OPTIONS,
+            Method::Trace => reqwest::Method::TRACE,
+            Method::Patch => reqwest::Method::PATCH,
+            Method::Other(s) => match reqwest::Method::from_bytes(s.as_bytes()) {
+                Ok(method) => method,
+                Err(e) => {
+                    // TODO: map errors more precisely
+                    return Ok(Err(ErrorCode::InternalError(Some(format!("{e:?}")))));
+                }
+            },
+        };
+        let scheme = request.scheme.unwrap_or(Scheme::Http);
+        let authority = if let Some(authority) = request.authority {
+            authority
+        } else {
+            match scheme {
+                Scheme::Http => ":80",
+                Scheme::Https => ":443",
+                _ => bail!("unable to determine authority for {scheme:?}"),
+            }
+            .into()
+        };
+        let path = request.path_with_query.unwrap_or_else(|| "/".into());
+
+        let InputStream::Host(mut request_rx) = request.body.stream.take().unwrap() else {
+            todo!("handle non-`InputStream::Host` case");
+        };
+
+        let (mut request_body_tx, request_body_rx) = mpsc::channel(1);
+
+        tokio::spawn(
+            async move {
+                loop {
+                    match request_rx.read(MAX_READ_SIZE) {
+                        Ok(bytes) if bytes.is_empty() => request_rx.ready().await,
+                        Ok(bytes) => request_body_tx.send(bytes).await?,
+                        Err(StreamError::Closed) => break Ok(()),
+                        Err(e) => break Err(anyhow!("error reading response body: {e:?}")),
+                    }
+                }
+            }
+            .map(|result| {
+                if let Err(e) = result {
+                    eprintln!("error streaming request body: {e:?}");
+                }
+            }),
+        );
+
+        let response = self
+            .client
+            .request(method, format!("{scheme}://{authority}{path}"))
+            .body(reqwest::Body::wrap_stream(
+                request_body_rx.map(Ok::<_, Error>),
+            ))
+            .send()
+            .await
+            .map_err(|e| {
+                // TODO: map errors more precisely
+                ErrorCode::InternalError(Some(format!("{e:?}")))
+            })?;
+
+        let status_code = response.status().as_u16();
+        let headers = Fields(
+            response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.as_str().into(), v.as_bytes().into()))
+                .collect(),
+        );
+
+        let (mut response_body_tx, response_body_rx) = mpsc::channel(1);
+
+        tokio::spawn(
+            async move {
+                let mut stream = response.bytes_stream();
+
+                while let Some(chunk) = stream.try_next().await? {
+                    response_body_tx.send(chunk).await?;
+                }
+
+                Ok::<_, Error>(())
+            }
+            .map(|result| {
+                if let Err(e) = result {
+                    eprintln!("error streaming response body: {e:?}");
+                }
+            }),
+        );
+
+        Ok(Ok(self.shared_table().push(Response {
+            status_code,
+            headers,
+            body: Body {
+                stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                    response_body_rx,
+                )))),
+                // TODO: handle response trailers
+                trailers: None,
+            },
+        })?))
     }
 }
 
@@ -133,6 +252,7 @@ async fn handle_request(
             isyswasfa: IsyswasfaCtx::new(),
             http_state: HttpState {
                 shared_table: Arc::new(Mutex::new(ResourceTable::new())),
+                client: Arc::new(reqwest::Client::new()),
             },
         },
     );
@@ -235,7 +355,7 @@ async fn handle_request(
                 async move {
                     isyswasfa_host::poll_loop_until(&mut store, async move {
                         loop {
-                            match response_rx.read(64 * 1024) {
+                            match response_rx.read(MAX_READ_SIZE) {
                                 Ok(bytes) if bytes.is_empty() => response_rx.ready().await,
                                 Ok(bytes) => response_body_tx.send(Ok(Frame::data(bytes))).await?,
                                 Err(StreamError::Closed) => break Ok(()),

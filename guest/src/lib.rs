@@ -142,12 +142,6 @@ fn set_pending(pending: Vec<PendingState>) {
     }
 }
 
-fn take_pending_nonempty() -> Vec<PendingState> {
-    let pending = take_pending();
-    assert!(!pending.is_empty());
-    pending
-}
-
 fn take_pending() -> Vec<PendingState> {
     unsafe { mem::take(&mut PENDING) }
 }
@@ -185,7 +179,7 @@ impl Drop for FutureState {
 }
 
 fn push_listens(future_state: &Rc<RefCell<FutureState>>) {
-    for pending in take_pending_nonempty() {
+    for pending in take_pending() {
         push_output(PollOutput::Listen(PollOutputListen {
             pending: pending.pending,
             state: u32::try_from(Box::into_raw(Box::new(ListenState {

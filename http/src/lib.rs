@@ -25,11 +25,25 @@ use {
     async_trait::async_trait,
     futures::channel::oneshot,
     isyswasfa_host::IsyswasfaView,
-    std::sync::MutexGuard,
+    std::{fmt, sync::MutexGuard},
     wasi::http::types::{ErrorCode, HeaderError, Method, RequestOptionsError, Scheme},
     wasmtime::component::{Linker, Resource, ResourceTable},
     wasmtime_wasi::preview2::{bindings::wasi::io::error::Error, InputStream},
 };
+
+impl fmt::Display for Scheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Scheme::Http => "http",
+                Scheme::Https => "https",
+                Scheme::Other(s) => s,
+            }
+        )
+    }
+}
 
 pub trait WasiHttpView: Send + IsyswasfaView + 'static {
     fn table(&mut self) -> &mut ResourceTable;
