@@ -276,10 +276,10 @@ mod test {
                     Instantiation {
                         dependency: None,
                         arguments: [(
-                            "wasi:http/handler@0.3.0-draft-2024-02-14".to_owned(),
+                            "wasi:http/handler@0.3.0-draft".to_owned(),
                             InstantiationArg {
                                 instance: "service".into(),
-                                export: Some("wasi:http/handler@0.3.0-draft-2024-02-14".into()),
+                                export: Some("wasi:http/handler@0.3.0-draft".into()),
                             },
                         )]
                         .into_iter()

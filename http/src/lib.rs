@@ -3,8 +3,8 @@
 wasmtime::component::bindgen!({
     path: "../wit",
     interfaces: "
-      import wasi:http/types@0.3.0-draft-2024-02-14;
-      import wasi:http/handler@0.3.0-draft-2024-02-14;
+      import wasi:http/types@0.3.0-draft;
+      import wasi:http/handler@0.3.0-draft;
     ",
     isyswasfa: true,
     with: {

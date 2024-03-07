@@ -12,6 +12,6 @@ world round-trip {
 
 world proxy {
   import isyswasfa:io/pipe;
-  import wasi:http/handler@0.3.0-draft-2024-02-14;  
-  export wasi:http/handler@0.3.0-draft-2024-02-14;
+  import wasi:http/handler@0.3.0-draft;  
+  export wasi:http/handler@0.3.0-draft;
 }
