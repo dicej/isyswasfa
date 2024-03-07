@@ -34,10 +34,12 @@ In short, it's an experiment to see how close we can get to the Preview 3 develo
 
 ### Examples
 
-The [test](./test) directory contains a few guest programs and corresponding host code for executing them:
+The [test/cases](./test/cases) directory contains a few guest programs and corresponding host code for executing them:
 
-- [round-trip](./test/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
-- [service](./test/service/src/lib.rs) and [middleware](./test/middleware/src/lib.rs): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft-2024-02-14`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
+- [round-trip](./test/cases/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
+- [service](./test/cases/service/src/lib.rs) and [middleware](./test/cases/middleware/src/lib.rs): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
+- [hash-all](./test/cases/hash-all/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of sending multiple concurrent outgoing requests, hashing the response bodies without buffering, and streaming the hashes back to the client.
+- [echo](./test/cases/echo/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of either echoing the request body back to the client without buffering, or else piping the request body to an outgoing request and then streaming the response body back to the client.
 
 ### How it works
 
