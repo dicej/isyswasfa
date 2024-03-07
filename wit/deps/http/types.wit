@@ -328,8 +328,15 @@ interface types {
     /// component by e.g. `handler.handle`.
     headers: func() -> headers;
 
-    /// Takes onwership of the `request` and returns the `body`.
-    consume: static func(this: request) -> body;
+    /// Get the body associated with the Request.
+    ///
+    /// This body resource is a child: it must be dropped before the parent
+    /// `request` is dropped, or its ownership is transfered to another
+    /// component by e.g. `handler.handle`.
+    body: func() -> body;
+
+    /// Takes onwership of the `request` and returns the `headers` and `body`.
+    into-parts: static func(this: request) -> tuple<headers, body>;
   }
 
   /// Parameters for making an HTTP Request. Each of these parameters is
@@ -404,7 +411,14 @@ interface types {
     /// component by e.g. `handler.handle`.
     headers: func() -> headers;
 
-    /// Takes ownership of the `response` and returns the `body`.
-    consume: static func(this: response) -> body;
+    /// Get the body associated with the Response.
+    ///
+    /// This body resource is a child: it must be dropped before the parent
+    /// `response` is dropped, or its ownership is transfered to another
+    /// component by e.g. `handler.handle`.
+    body: func() -> body;
+
+    /// Takes onwership of the `response` and returns the `headers` and `body`.
+    into-parts: static func(this: response) -> tuple<headers, body>;
   }
 }

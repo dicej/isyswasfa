@@ -214,8 +214,9 @@ impl<T: WasiHttpView> wasi::http::types::HostFields for T {
     }
 
     fn clone(&mut self, this: Resource<Fields>) -> wasmtime::Result<Resource<Fields>> {
-        let entries = self.shared_table().get(&this)?.0.clone();
-        Ok(self.shared_table().push(Fields(entries))?)
+        let mut table = self.shared_table();
+        let entries = table.get(&this)?.0.clone();
+        Ok(table.push(Fields(entries))?)
     }
 
     fn drop(&mut self, this: Resource<Fields>) -> wasmtime::Result<()> {
@@ -235,13 +236,14 @@ where
         trailers: Option<Resource<FieldsReceiver>>,
     ) -> wasmtime::Result<Resource<Body>> {
         let stream = self.table().delete(stream)?;
+        let mut table = self.shared_table();
         let trailers = if let Some(trailers) = trailers {
-            Some(self.shared_table().delete(trailers)?)
+            Some(table.delete(trailers)?)
         } else {
             None
         };
 
-        Ok(self.shared_table().push(Body {
+        Ok(table.push(Body {
             stream: Some(stream),
             trailers,
         })?)
@@ -296,15 +298,16 @@ where
         body: Resource<Body>,
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<Resource<Request>> {
-        let headers = self.shared_table().delete(headers)?;
-        let body = self.shared_table().delete(body)?;
+        let mut table = self.shared_table();
+        let headers = table.delete(headers)?;
+        let body = table.delete(body)?;
         let options = if let Some(options) = options {
-            Some(self.shared_table().delete(options)?)
+            Some(table.delete(options)?)
         } else {
             None
         };
 
-        Ok(self.shared_table().push(Request {
+        Ok(table.push(Request {
             method: Method::Get,
             scheme: None,
             path_with_query: None,
@@ -372,9 +375,10 @@ where
         this: Resource<Request>,
     ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
         // TODO: This should return an immutable child handle
-        let options = self.shared_table().get(&this)?.options;
+        let mut table = self.shared_table();
+        let options = table.get(&this)?.options;
         Ok(if let Some(options) = options {
-            Some(self.shared_table().push(options)?)
+            Some(table.push(options)?)
         } else {
             None
         })
@@ -382,13 +386,24 @@ where
 
     fn headers(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.shared_table().get(&this)?.headers.clone();
-        Ok(self.shared_table().push(headers)?)
+        let mut table = self.shared_table();
+        let headers = table.get(&this)?.headers.clone();
+        Ok(table.push(headers)?)
     }
 
-    fn consume(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Body>> {
-        let body = self.shared_table().delete(this)?.body;
-        Ok(self.shared_table().push(body)?)
+    fn body(&mut self, _this: Resource<Request>) -> wasmtime::Result<Resource<Body>> {
+        Err(anyhow!("todo: implement wasi:http/types#request.body"))
+    }
+
+    fn into_parts(
+        &mut self,
+        this: Resource<Request>,
+    ) -> wasmtime::Result<(Resource<Fields>, Resource<Body>)> {
+        let mut table = self.shared_table();
+        let request = table.delete(this)?;
+        let headers = table.push(request.headers)?;
+        let body = table.push(request.body)?;
+        Ok((headers, body))
     }
 
     fn drop(&mut self, this: Resource<Request>) -> wasmtime::Result<()> {
@@ -406,10 +421,11 @@ where
         headers: Resource<Fields>,
         body: Resource<Body>,
     ) -> wasmtime::Result<Resource<Response>> {
-        let headers = self.shared_table().delete(headers)?;
-        let body = self.shared_table().delete(body)?;
+        let mut table = self.shared_table();
+        let headers = table.delete(headers)?;
+        let body = table.delete(body)?;
 
-        Ok(self.shared_table().push(Response {
+        Ok(table.push(Response {
             status_code: 200,
             headers,
             body,
@@ -431,13 +447,24 @@ where
 
     fn headers(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.shared_table().get(&this)?.headers.clone();
-        Ok(self.shared_table().push(headers)?)
+        let mut table = self.shared_table();
+        let headers = table.get(&this)?.headers.clone();
+        Ok(table.push(headers)?)
     }
 
-    fn consume(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Body>> {
-        let body = self.shared_table().delete(this)?.body;
-        Ok(self.shared_table().push(body)?)
+    fn body(&mut self, _this: Resource<Response>) -> wasmtime::Result<Resource<Body>> {
+        Err(anyhow!("todo: implement wasi:http/types#response.body"))
+    }
+
+    fn into_parts(
+        &mut self,
+        this: Resource<Response>,
+    ) -> wasmtime::Result<(Resource<Fields>, Resource<Body>)> {
+        let mut table = self.shared_table();
+        let response = table.delete(this)?;
+        let headers = table.push(response.headers)?;
+        let body = table.push(response.body)?;
+        Ok((headers, body))
     }
 
     fn drop(&mut self, this: Resource<Response>) -> wasmtime::Result<()> {

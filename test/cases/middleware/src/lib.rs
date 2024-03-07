@@ -55,7 +55,7 @@ impl Guest for Component {
             }
             _ => true,
         });
-        let body = Request::consume(request);
+        let (_, body) = Request::into_parts(request);
 
         let body = if content_deflated {
             // Next, spawn a task to pipe and decode the original request body and trailers into a new request
@@ -112,7 +112,7 @@ impl Guest for Component {
         if accept_deflated {
             headers.push(("content-encoding".into(), b"deflate".into()));
         }
-        let body = Response::consume(response);
+        let (_, body) = Response::into_parts(response);
 
         let body = if accept_deflated {
             // Spawn another task; this one is to pipe (and optionally encode) the original response body and

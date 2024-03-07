@@ -111,7 +111,7 @@ async fn hash(url: &Url) -> Result<String> {
         bail!("unexpected status: {status}");
     }
 
-    let body = Response::consume(response);
+    let (_, body) = Response::into_parts(response);
     let mut stream = isyswasfa_guest::stream(body.stream().unwrap());
 
     use sha2::Digest;

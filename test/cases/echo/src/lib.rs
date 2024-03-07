@@ -44,7 +44,10 @@ impl Guest for Component {
             (Method::Post, Some("/echo")) => {
                 // Echo the request body without buffering it.
 
-                Ok(Response::new(filtered_headers, Request::consume(request)))
+                Ok(Response::new(
+                    filtered_headers,
+                    Request::into_parts(request).1,
+                ))
             }
 
             (Method::Post, Some("/double-echo")) => {
@@ -56,7 +59,8 @@ impl Guest for Component {
                         .and_then(|v| std::str::from_utf8(v).ok())
                         .and_then(|v| Url::parse(v).ok())
                 }) {
-                    let request = Request::new(filtered_headers, Request::consume(request), None);
+                    let request =
+                        Request::new(filtered_headers, Request::into_parts(request).1, None);
 
                     request.set_method(&method).unwrap();
                     request.set_path_with_query(Some(url.path())).unwrap();

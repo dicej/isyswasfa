@@ -24,7 +24,7 @@ impl Guest for Component {
     /// Return a response which echoes the request headers, body, and trailers.
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         let headers = request.headers().clone();
-        let body = Request::consume(request);
+        let (_, body) = Request::into_parts(request);
 
         Ok(Response::new(headers, body))
     }
