@@ -1,0 +1,14 @@
+[package]
+name = "middleware"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true}
+wit-bindgen = { workspace = true}
+isyswasfa-guest = { workspace = true}
+flate2 = "1.0.28"
+
+[lib]
+crate-type = ["cdylib"]
+

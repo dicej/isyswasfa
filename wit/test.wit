@@ -10,12 +10,8 @@ world round-trip {
   export baz;
 }
 
-world service {
+world proxy {
   import isyswasfa:io/pipe;
-  export wasi:http/handler@0.3.0-draft-2024-02-14;
-}
-
-world middleware {
-  include service;
   import wasi:http/handler@0.3.0-draft-2024-02-14;  
+  export wasi:http/handler@0.3.0-draft-2024-02-14;
 }

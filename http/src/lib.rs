@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 wasmtime::component::bindgen!({
     path: "../wit",
     interfaces: "
@@ -283,12 +285,12 @@ where
         let headers = self.shared_table().delete(headers)?;
         let body = self.shared_table().delete(body)?;
         let options = if let Some(options) = options {
-            Some(self.table().delete(options)?)
+            Some(self.shared_table().delete(options)?)
         } else {
             None
         };
 
-        Ok(self.table().push(Request {
+        Ok(self.shared_table().push(Request {
             method: Method::Get,
             scheme: None,
             path_with_query: None,
@@ -300,7 +302,7 @@ where
     }
 
     fn method(&mut self, this: Resource<Request>) -> wasmtime::Result<Method> {
-        Ok(self.table().get(&this)?.method.clone())
+        Ok(self.shared_table().get(&this)?.method.clone())
     }
 
     fn set_method(
@@ -308,12 +310,12 @@ where
         this: Resource<Request>,
         method: Method,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.table().get_mut(&this)?.method = method;
+        self.shared_table().get_mut(&this)?.method = method;
         Ok(Ok(()))
     }
 
     fn scheme(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<Scheme>> {
-        Ok(self.table().get(&this)?.scheme.clone())
+        Ok(self.shared_table().get(&this)?.scheme.clone())
     }
 
     fn set_scheme(
@@ -321,12 +323,12 @@ where
         this: Resource<Request>,
         scheme: Option<Scheme>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.table().get_mut(&this)?.scheme = scheme;
+        self.shared_table().get_mut(&this)?.scheme = scheme;
         Ok(Ok(()))
     }
 
     fn path_with_query(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-        Ok(self.table().get(&this)?.path_with_query.clone())
+        Ok(self.shared_table().get(&this)?.path_with_query.clone())
     }
 
     fn set_path_with_query(
@@ -334,12 +336,12 @@ where
         this: Resource<Request>,
         path_with_query: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.table().get_mut(&this)?.path_with_query = path_with_query;
+        self.shared_table().get_mut(&this)?.path_with_query = path_with_query;
         Ok(Ok(()))
     }
 
     fn authority(&mut self, this: Resource<Request>) -> wasmtime::Result<Option<String>> {
-        Ok(self.table().get(&this)?.authority.clone())
+        Ok(self.shared_table().get(&this)?.authority.clone())
     }
 
     fn set_authority(
@@ -347,7 +349,7 @@ where
         this: Resource<Request>,
         authority: Option<String>,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.table().get_mut(&this)?.authority = authority;
+        self.shared_table().get_mut(&this)?.authority = authority;
         Ok(Ok(()))
     }
 
@@ -356,9 +358,9 @@ where
         this: Resource<Request>,
     ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
         // TODO: This should return an immutable child handle
-        let options = self.table().get(&this)?.options;
+        let options = self.shared_table().get(&this)?.options;
         Ok(if let Some(options) = options {
-            Some(self.table().push(options)?)
+            Some(self.shared_table().push(options)?)
         } else {
             None
         })
@@ -366,17 +368,17 @@ where
 
     fn headers(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.table().get(&this)?.headers.clone();
+        let headers = self.shared_table().get(&this)?.headers.clone();
         Ok(self.shared_table().push(headers)?)
     }
 
     fn consume(&mut self, this: Resource<Request>) -> wasmtime::Result<Resource<Body>> {
-        let body = self.table().delete(this)?.body;
+        let body = self.shared_table().delete(this)?.body;
         Ok(self.shared_table().push(body)?)
     }
 
     fn drop(&mut self, this: Resource<Request>) -> wasmtime::Result<()> {
-        self.table().delete(this)?;
+        self.shared_table().delete(this)?;
         Ok(())
     }
 }
@@ -393,7 +395,7 @@ where
         let headers = self.shared_table().delete(headers)?;
         let body = self.shared_table().delete(body)?;
 
-        Ok(self.table().push(Response {
+        Ok(self.shared_table().push(Response {
             status_code: 200,
             headers,
             body,
@@ -401,7 +403,7 @@ where
     }
 
     fn status_code(&mut self, this: Resource<Response>) -> wasmtime::Result<u16> {
-        Ok(self.table().get(&this)?.status_code)
+        Ok(self.shared_table().get(&this)?.status_code)
     }
 
     fn set_status_code(
@@ -409,34 +411,34 @@ where
         this: Resource<Response>,
         status_code: u16,
     ) -> wasmtime::Result<Result<(), ()>> {
-        self.table().get_mut(&this)?.status_code = status_code;
+        self.shared_table().get_mut(&this)?.status_code = status_code;
         Ok(Ok(()))
     }
 
     fn headers(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Fields>> {
         // TODO: This should return an immutable child handle
-        let headers = self.table().get(&this)?.headers.clone();
+        let headers = self.shared_table().get(&this)?.headers.clone();
         Ok(self.shared_table().push(headers)?)
     }
 
     fn consume(&mut self, this: Resource<Response>) -> wasmtime::Result<Resource<Body>> {
-        let body = self.table().delete(this)?.body;
+        let body = self.shared_table().delete(this)?.body;
         Ok(self.shared_table().push(body)?)
     }
 
     fn drop(&mut self, this: Resource<Response>) -> wasmtime::Result<()> {
-        self.table().delete(this)?;
+        self.shared_table().delete(this)?;
         Ok(())
     }
 }
 
 impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
     fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
-        Ok(self.table().push(RequestOptions::default())?)
+        Ok(self.shared_table().push(RequestOptions::default())?)
     }
 
     fn connect_timeout(&mut self, this: Resource<RequestOptions>) -> wasmtime::Result<Option<u64>> {
-        Ok(self.table().get(&this)?.connect_timeout)
+        Ok(self.shared_table().get(&this)?.connect_timeout)
     }
 
     fn set_connect_timeout(
@@ -444,7 +446,7 @@ impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
         this: Resource<RequestOptions>,
         connect_timeout: Option<u64>,
     ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-        self.table().get_mut(&this)?.connect_timeout = connect_timeout;
+        self.shared_table().get_mut(&this)?.connect_timeout = connect_timeout;
         Ok(Ok(()))
     }
 
@@ -452,7 +454,7 @@ impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
         &mut self,
         this: Resource<RequestOptions>,
     ) -> wasmtime::Result<Option<u64>> {
-        Ok(self.table().get(&this)?.first_byte_timeout)
+        Ok(self.shared_table().get(&this)?.first_byte_timeout)
     }
 
     fn set_first_byte_timeout(
@@ -460,7 +462,7 @@ impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
         this: Resource<RequestOptions>,
         first_byte_timeout: Option<u64>,
     ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-        self.table().get_mut(&this)?.first_byte_timeout = first_byte_timeout;
+        self.shared_table().get_mut(&this)?.first_byte_timeout = first_byte_timeout;
         Ok(Ok(()))
     }
 
@@ -468,7 +470,7 @@ impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
         &mut self,
         this: Resource<RequestOptions>,
     ) -> wasmtime::Result<Option<u64>> {
-        Ok(self.table().get(&this)?.between_bytes_timeout)
+        Ok(self.shared_table().get(&this)?.between_bytes_timeout)
     }
 
     fn set_between_bytes_timeout(
@@ -476,12 +478,12 @@ impl<T: WasiHttpView> wasi::http::types::HostRequestOptions for T {
         this: Resource<RequestOptions>,
         between_bytes_timeout: Option<u64>,
     ) -> wasmtime::Result<Result<(), RequestOptionsError>> {
-        self.table().get_mut(&this)?.between_bytes_timeout = between_bytes_timeout;
+        self.shared_table().get_mut(&this)?.between_bytes_timeout = between_bytes_timeout;
         Ok(Ok(()))
     }
 
     fn drop(&mut self, this: Resource<RequestOptions>) -> wasmtime::Result<()> {
-        self.table().delete(this)?;
+        self.shared_table().delete(this)?;
         Ok(())
     }
 }

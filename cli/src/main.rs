@@ -1,6 +1,6 @@
 wasmtime::component::bindgen!({
     path: "../wit",
-    world: "service",
+    world: "proxy",
     isyswasfa: true,
     with: {
         "wasi:clocks/monotonic-clock": wasmtime_wasi::preview2::bindings::wasi::clocks::monotonic_clock,
@@ -137,7 +137,7 @@ async fn handle_request(
         },
     );
 
-    let (service, instance) = Service::instantiate_pre(&mut store, pre).await?;
+    let (service, instance) = Proxy::instantiate_pre(&mut store, pre).await?;
 
     isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
@@ -145,7 +145,7 @@ async fn handle_request(
 
     let (request_trailers_tx, request_trailers_rx) = oneshot::channel();
 
-    let wasi_request = WasiHttpView::table(store.data_mut()).push(Request {
+    let wasi_request = store.data_mut().shared_table().push(Request {
         method: match request.method() {
             &http::Method::GET => Method::Get,
             &http::Method::POST => Method::Post,
@@ -230,7 +230,7 @@ async fn handle_request(
             mut store,
         }) = event
         {
-            let response = WasiHttpView::table(store.data_mut()).delete(response)?;
+            let response = store.data_mut().shared_table().delete(response)?;
 
             let mut body = response.body;
 

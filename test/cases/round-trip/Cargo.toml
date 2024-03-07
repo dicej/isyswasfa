@@ -1,0 +1,12 @@
+[package]
+name = "round-trip"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = { workspace = true}
+wit-bindgen = { workspace = true}
+isyswasfa-guest = { workspace = true}
+
+[lib]
+crate-type = ["cdylib"]

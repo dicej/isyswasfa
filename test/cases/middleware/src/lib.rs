@@ -1,7 +1,7 @@
 mod bindings {
     wit_bindgen::generate!({
-        path: "../../wit",
-        world: "middleware",
+        path: "../../../wit",
+        world: "proxy",
         isyswasfa: "-middleware",
         exports: {
             "wasi:http/handler": super::Component

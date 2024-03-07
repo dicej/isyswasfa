@@ -45,7 +45,12 @@ use {
         },
     },
     by_address::ByAddress,
-    futures::{channel::oneshot, future::FutureExt},
+    futures::{
+        channel::oneshot,
+        future::FutureExt,
+        sink::{self, Sink},
+        stream::{self, Stream},
+    },
     once_cell::sync::Lazy,
     std::{
         any::Any,
@@ -392,9 +397,64 @@ impl IntoFuture for Pollable {
     }
 }
 
+const READ_SIZE: u64 = 64 * 1024;
+
+pub fn sink(stream: OutputStream) -> impl Sink<Vec<u8>, Error = StreamError> {
+    Box::pin(sink::unfold(stream, {
+        move |stream, chunk: Vec<u8>| async move {
+            let mut offset = 0;
+            let mut flushing = false;
+
+            loop {
+                match stream.check_write() {
+                    Ok(0) => stream.subscribe().await,
+                    Ok(count) => {
+                        if offset == chunk.len() {
+                            if flushing {
+                                break Ok(stream);
+                            } else {
+                                stream.flush().expect("stream should be flushable");
+                                flushing = true;
+                            }
+                        } else {
+                            let count = usize::try_from(count).unwrap().min(chunk.len() - offset);
+
+                            match stream.write(&chunk[offset..][..count]) {
+                                Ok(()) => {
+                                    offset += count;
+                                }
+                                Err(e) => break Err(e),
+                            }
+                        }
+                    }
+                    Err(e) => break Err(e),
+                }
+            }
+        }
+    }))
+}
+
+pub fn stream(stream: InputStream) -> impl Stream<Item = Result<Vec<u8>, StreamError>> {
+    Box::pin(stream::unfold(stream, |stream| async move {
+        loop {
+            match stream.read(READ_SIZE) {
+                Ok(buffer) => {
+                    if buffer.is_empty() {
+                        stream.subscribe().await;
+                    } else {
+                        break Some((Ok(buffer), stream));
+                    }
+                }
+                Err(StreamError::Closed) => break None,
+                Err(e) => break Some((Err(e), stream)),
+            }
+        }
+    }))
+}
+
 pub async fn copy(rx: &InputStream, tx: &OutputStream) -> Result<(), StreamError> {
     // TODO: use `OutputStream::splice`
-    while let Some(chunk) = read(rx, 64 * 1024).await? {
+    while let Some(chunk) = read(rx, READ_SIZE).await? {
         write_all(tx, &chunk).await?;
     }
     Ok(())
