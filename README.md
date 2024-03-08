@@ -1,19 +1,19 @@
 ## isyswasfa: I sync, you sync, we all sync for async
 
-An experimental polyfill for composable concurrency based on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) and [WASI](https://github.com/WebAssembly/WASI) Preview 2
+An experimental polyfill for composable concurrency based on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) and [WASI](https://github.com/WebAssembly/WASI) 0.2.x
 
 ### Background
 
-As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI Preview 2 includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI Preview 3 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
+As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI 0.2.x includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI 0.3.0 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
 
 ### So what is this?
 
 A pile of hacks -- but a _useful_ pile of hacks.  The goals are:
 
 - To provide early, real-world implementation feedback to the Component Model "async" design process
-- To give developers a tool for "polyfilling" composable concurrency on top of WASI Preview 2, ideally in such a way that upgrading application code to Preview 3 requires little or no effort
+- To give developers a tool for "polyfilling" composable concurrency on top of WASI 0.2.x, ideally in such a way that upgrading application code to 0.3.0 requires little or no effort
 
-In short, it's an experiment to see how close we can get to the Preview 3 developer experience with minimal changes to existing tools.
+In short, it's an experiment to see how close we can get to the 0.3.0 developer experience with minimal changes to existing tools.
 
 ### Features
 
