@@ -24,7 +24,8 @@ In short, it's an experiment to see how close we can get to the 0.3.0 developer 
   - For example, you can spawn a task to stream an HTTP response body and return the response object to the caller before the stream has finished.
 - Async-friendly composition using `wasm-compose`
 - Asynchronous cancellation of host and guest tasks (currently untested)
-- An `isyswasfa` CLI tool supporting a `serve` subcommand for running `isyswasfa`-flavored `wasi:http@0.3.0-draft` components
+- A working implementation of `wasi:http@0.3.0-draft`
+- A CLI tool supporting a `serve` subcommand for running `isyswasfa`-flavored `wasi:http@0.3.0-draft` components
 
 ### Planned features
 

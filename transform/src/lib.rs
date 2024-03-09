@@ -70,6 +70,12 @@ impl<'a> Asyncify<'a> {
         // TODO: make interface and function include/exclude lists configurable
         let asyncify =
             |function: &Function| match (package, old.name.as_deref(), function.name.as_str()) {
+                (_, _, name)
+                    if name.ends_with("-isyswasfa-start")
+                        || name.ends_with("-isyswasfa-result") =>
+                {
+                    false
+                }
                 (Some(("isyswasfa", _)), ..) => false,
                 (Some(("wasi", "http")), Some("handler"), _)
                 | (Some(("wasi", "http")), Some("types"), "[static]body.finish") => true,

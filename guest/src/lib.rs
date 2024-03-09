@@ -132,7 +132,7 @@ fn take_output() -> Vec<PollOutput> {
 
 static mut PENDING: Vec<PendingState> = Vec::new();
 
-fn add_pending(pending_state: PendingState) {
+fn push_pending(pending_state: PendingState) {
     unsafe { PENDING.push(pending_state) }
 }
 
@@ -365,7 +365,7 @@ pub fn poll(input: Vec<PollInput>) -> Vec<PollOutput> {
 pub async fn await_ready(pending: Pending) -> Ready {
     let (tx, rx) = oneshot::channel();
     let cancel_state = Rc::new(RefCell::new(CancelState::Pending));
-    add_pending(PendingState {
+    push_pending(PendingState {
         pending,
         tx,
         cancel_state: cancel_state.clone(),
