@@ -43,7 +43,8 @@ impl Guest for Component {
         let authority = request.authority();
         let mut accept_deflated = false;
         let mut content_deflated = false;
-        let mut headers = request.headers().entries();
+        let (headers, body) = Request::into_parts(request);
+        let mut headers = headers.entries();
         headers.retain(|(k, v)| match (k.as_str(), v.as_slice()) {
             ("accept-encoding", b"deflate") => {
                 accept_deflated = true;
@@ -55,7 +56,6 @@ impl Guest for Component {
             }
             _ => true,
         });
-        let (_, body) = Request::into_parts(request);
 
         let body = if content_deflated {
             // Next, spawn a task to pipe and decode the original request body and trailers into a new request
@@ -108,11 +108,11 @@ impl Guest for Component {
 
         // Now that we have the response, extract the parts, adding an extra header if we'll be encoding the body.
         let status_code = response.status_code();
-        let mut headers = response.headers().entries();
+        let (headers, body) = Response::into_parts(response);
+        let mut headers = headers.entries();
         if accept_deflated {
             headers.push(("content-encoding".into(), b"deflate".into()));
         }
-        let (_, body) = Response::into_parts(response);
 
         let body = if accept_deflated {
             // Spawn another task; this one is to pipe (and optionally encode) the original response body and

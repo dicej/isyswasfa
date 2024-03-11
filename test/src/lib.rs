@@ -270,15 +270,32 @@ mod test {
     }
 
     #[tokio::test]
-    async fn service() -> Result<()> {
+    async fn service_rust() -> Result<()> {
         service_test(&build_rust_component("service").await?, false).await
     }
 
     #[tokio::test]
-    async fn middleware() -> Result<()> {
+    async fn service_python() -> Result<()> {
+        service_test(
+            &build_python_component("proxy", "service", "-service").await?,
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn middleware_rust() -> Result<()> {
+        middleware(&build_rust_component("service").await?).await
+    }
+
+    #[tokio::test]
+    async fn middleware_python() -> Result<()> {
+        middleware(&build_python_component("proxy", "service", "-service").await?).await
+    }
+
+    async fn middleware(service: &[u8]) -> Result<()> {
         let dir = tempfile::tempdir()?;
 
-        let service = build_rust_component("service").await?;
         let service_file = dir.path().join("service.wasm");
         fs::write(&service_file, &service).await?;
 
