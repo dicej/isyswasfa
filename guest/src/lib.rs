@@ -380,7 +380,7 @@ impl IntoFuture for Pollable {
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + 'static>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let v = poll::block_isyswasfa(&self);
+        let v = poll::block_isyswasfa_start(&self);
         Box::pin(async move {
             let _self = self;
             match v {

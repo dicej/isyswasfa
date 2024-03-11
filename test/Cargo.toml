@@ -20,6 +20,7 @@ wasm-compose = { path = "../wasm-tools/crates/wasm-compose" }
 tempfile = "3.9.0"
 indexmap = "2.2.1"
 flate2 = "1.0.28"
+componentize-py = { path = "../componentize-py" }
 
 [dependencies]
 base64 = "0.22.0"

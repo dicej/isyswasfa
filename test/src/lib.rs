@@ -22,10 +22,13 @@ mod test {
         std::{
             collections::HashMap,
             io::Write,
-            iter, str,
+            iter,
+            path::Path,
+            str,
             sync::{Arc, Mutex, MutexGuard},
             time::Duration,
         },
+        tempfile::NamedTempFile,
         tokio::{fs, process::Command, sync::OnceCell},
         wasmtime::{
             component::{Component, Linker, Resource, ResourceTable},
@@ -63,14 +66,14 @@ mod test {
         });
     }
 
-    async fn build_component(name: &str) -> Result<Vec<u8>> {
+    async fn build_rust_component(name: &str) -> Result<Vec<u8>> {
         static BUILD: OnceCell<()> = OnceCell::const_new();
 
         BUILD
             .get_or_init(|| async {
                 assert!(
                     Command::new("cargo")
-                        .current_dir("cases")
+                        .current_dir("rust-cases")
                         .args(["build", "--workspace", "--target", "wasm32-wasi"])
                         .status()
                         .await
@@ -81,7 +84,7 @@ mod test {
             })
             .await;
 
-        const ADAPTER_PATH: &str = "cases/target/wasi_snapshot_preview1.reactor.wasm";
+        const ADAPTER_PATH: &str = "rust-cases/target/wasi_snapshot_preview1.reactor.wasm";
 
         static ADAPTER: OnceCell<()> = OnceCell::const_new();
 
@@ -108,9 +111,29 @@ mod test {
 
         ComponentEncoder::default()
             .validate(true)
-            .module(&fs::read(format!("cases/target/wasm32-wasi/debug/{name}.wasm")).await?)?
+            .module(&fs::read(format!("rust-cases/target/wasm32-wasi/debug/{name}.wasm")).await?)?
             .adapter("wasi_snapshot_preview1", &fs::read(ADAPTER_PATH).await?)?
             .encode()
+    }
+
+    async fn build_python_component(
+        world: &str,
+        name: &str,
+        isyswasfa_suffix: &str,
+    ) -> Result<Vec<u8>> {
+        let tmp = NamedTempFile::new()?;
+        componentize_py::componentize(
+            Some(Path::new("../wit")),
+            Some(world),
+            &[&format!("python-cases/{name}")],
+            &[],
+            "app",
+            tmp.path(),
+            None,
+            Some(isyswasfa_suffix),
+        )
+        .await?;
+        Ok(fs::read(tmp.path()).await?)
     }
 
     type RequestSender = Arc<
@@ -191,16 +214,23 @@ mod test {
     }
 
     #[tokio::test]
-    async fn round_trip() -> Result<()> {
+    async fn round_trip_rust() -> Result<()> {
+        round_trip(&build_rust_component("round_trip").await?).await
+    }
+
+    #[tokio::test]
+    async fn round_trip_python() -> Result<()> {
+        round_trip(&build_python_component("round-trip", "round-trip", "-round-trip").await?).await
+    }
+
+    async fn round_trip(component_bytes: &[u8]) -> Result<()> {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
 
         let engine = Engine::new(&config)?;
 
-        let component_bytes = build_component("round_trip").await?;
-
-        let component = Component::new(&engine, &component_bytes)?;
+        let component = Component::new(&engine, component_bytes)?;
 
         let mut linker = Linker::new(&engine);
 
@@ -224,7 +254,7 @@ mod test {
         let (round_trip, instance) =
             round_trip::RoundTrip::instantiate_async(&mut store, &component, &linker).await?;
 
-        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+        isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
         let value = round_trip
             .component_test_baz()
@@ -241,18 +271,18 @@ mod test {
 
     #[tokio::test]
     async fn service() -> Result<()> {
-        service_test(&build_component("service").await?, false).await
+        service_test(&build_rust_component("service").await?, false).await
     }
 
     #[tokio::test]
     async fn middleware() -> Result<()> {
         let dir = tempfile::tempdir()?;
 
-        let service = build_component("service").await?;
+        let service = build_rust_component("service").await?;
         let service_file = dir.path().join("service.wasm");
         fs::write(&service_file, &service).await?;
 
-        let middleware = build_component("middleware").await?;
+        let middleware = build_rust_component("middleware").await?;
         let middleware_file = dir.path().join("middleware.wasm");
         fs::write(&middleware_file, &middleware).await?;
 
@@ -495,7 +525,7 @@ mod test {
             }
         });
 
-        let component_bytes = build_component("hash_all").await?;
+        let component_bytes = build_rust_component("hash_all").await?;
 
         let mut config = Config::new();
         config.wasm_component_model(true);
@@ -665,7 +695,7 @@ mod test {
             .collect::<Vec<_>>()
         };
 
-        let component_bytes = build_component("echo").await?;
+        let component_bytes = build_rust_component("echo").await?;
 
         let mut config = Config::new();
         config.wasm_component_model(true);

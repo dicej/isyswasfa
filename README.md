@@ -36,12 +36,12 @@ In short, it's an experiment to see how close we can get to the 0.3.0 developer 
 
 ### Examples
 
-The [test/cases](./test/cases) directory contains a few guest programs and corresponding host code for executing them:
+The [test/rust-cases](./test/rust-cases) directory contains a few guest programs and corresponding host code for executing them:
 
-- [round-trip](./test/cases/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
-- [service](./test/cases/service/src/lib.rs) and [middleware](./test/cases/middleware/src/lib.rs): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
-- [hash-all](./test/cases/hash-all/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of sending multiple concurrent outgoing requests, hashing the response bodies without buffering, and streaming the hashes back to the client.
-- [echo](./test/cases/echo/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of either echoing the request body back to the client without buffering, or else piping the request body to an outgoing request and then streaming the response body back to the client.
+- [round-trip](./test/rust-cases/round-trip/src/lib.rs): a simple example of an exported async function calling an imported async function
+- [service](./test/rust-cases/service/src/lib.rs) and [middleware](./test/rust-cases/middleware/src/lib.rs): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
+- [hash-all](./test/rust-cases/hash-all/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of sending multiple concurrent outgoing requests, hashing the response bodies without buffering, and streaming the hashes back to the client.
+- [echo](./test/rust-cases/echo/src/lib.rs): A `wasi:http@0.3.0-draft` component, capable of either echoing the request body back to the client without buffering, or else piping the request body to an outgoing request and then streaming the response body back to the client.
 
 ### How it works
 
@@ -58,3 +58,31 @@ In addition, the guest binding generator exports a function named `isyswasfa-pol
 (TODO: add a step-by-step example with a diagram)
 
 Although WASI imports are *not* transformed as described above, the `isyswasfa-host` and `isyswasfa-guest` support libraries have special support for `wasi:io/poll.pollable` handles such that they can be concurrently `await`ed by the guest and multiplexed by the host, allowing e.g. `monotonic_clock::subscribe_duration(ns).await` to do just what you'd expect.
+
+### Building and running tests
+
+#### Prerequisites
+
+- Unix-like environment
+- Rust
+
+First, make sure you have all the submodules cloned:
+
+```shell
+git submodule update --init --recursive
+```
+
+Next, grab a `wasi-sockets`-enabled build of `wasi-sdk` (replace `linux` with `macos` or `mingw` (Windows) as appropriate):
+
+```shell
+curl -LO https://github.com/dicej/wasi-sdk/releases/download/wasi-sockets-alpha-2/wasi-sdk-20.26g68203b20b82e-linux.tar.gz
+tar xf tar xf wasi-sdk-20.26g68203b20b82e-linux.tar.gz
+sudo mv wasi-sdk-20.26g68203b20b82e /opt/wasi-sdk
+export WASI_SDK_PATH=/opt/wasi-sdk
+```
+
+Finally, build and run the tests:
+
+```shell
+cargo test --release
+```

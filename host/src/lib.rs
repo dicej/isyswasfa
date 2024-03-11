@@ -680,7 +680,7 @@ impl<T: IsyswasfaView> IsyswasfaHost for T {
 }
 
 impl<T: IsyswasfaView> PollHost for T {
-    fn block_isyswasfa(
+    fn block_isyswasfa_start(
         &mut self,
         this: Resource<Pollable>,
     ) -> wasmtime::Result<Result<(), Resource<Task>>> {

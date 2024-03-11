@@ -5,12 +5,12 @@ members = [
   "host",
   "http",
   "test",
+  "transform",
 ]
 exclude = [
   "guest",
-  "test/guest",
   "wit-bindgen",
   "wasmtime",
   "wasm-tools",
-  "transform"
+  "componentize-py",
 ]
