@@ -112,7 +112,7 @@ And finally build and run the Python `hash-all` example:
 
 #### Composing Rust and Python components
 
-In addition to the tools we built above, we can build `wasm-compose` and use to to compose the Python `hash-all` component with the Rust `middleware` component.  Here, we use a lightly-patched version which supports exposing exports from multiple functions:
+In addition to the tools we built above, we can build `wasm-compose` and use it to compose the Python `hash-all` component with the Rust `middleware` component.  Here, we use a lightly-patched version which supports exposing exports from multiple subcomponents:
 
 ```shell
 cargo build --release --manifest-path wasm-tools/Cargo.toml
