@@ -654,12 +654,31 @@ mod test {
     }
 
     #[tokio::test]
-    async fn echo() -> Result<()> {
-        echo_test("/echo", None).await
+    async fn echo_rust() -> Result<()> {
+        echo_test(&build_rust_component("echo").await?, "/echo", None).await
     }
 
     #[tokio::test]
-    async fn double_echo() -> Result<()> {
+    async fn echo_python() -> Result<()> {
+        echo_test(
+            &build_python_component("proxy", "echo", "-echo").await?,
+            "/echo",
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn double_echo_rust() -> Result<()> {
+        double_echo(&build_rust_component("echo").await?).await
+    }
+
+    #[tokio::test]
+    async fn double_echo_python() -> Result<()> {
+        double_echo(&build_python_component("proxy", "echo", "-echo").await?).await
+    }
+
+    async fn double_echo(component_bytes: &[u8]) -> Result<()> {
         let send_request = Arc::new({
             move |state: &HttpState, request: Resource<Request>| {
                 let table = state.shared_table.clone();
@@ -700,10 +719,19 @@ mod test {
             }
         });
 
-        echo_test("/double-echo", Some(("/echo", send_request))).await
+        echo_test(
+            component_bytes,
+            "/double-echo",
+            Some(("/echo", send_request)),
+        )
+        .await
     }
 
-    async fn echo_test(uri: &str, double: Option<(&str, RequestSender)>) -> Result<()> {
+    async fn echo_test(
+        component_bytes: &[u8],
+        uri: &str,
+        double: Option<(&str, RequestSender)>,
+    ) -> Result<()> {
         let body = &{
             // A sorta-random-ish megabyte
             let mut n = 0_u8;
@@ -715,15 +743,13 @@ mod test {
             .collect::<Vec<_>>()
         };
 
-        let component_bytes = build_rust_component("echo").await?;
-
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
 
         let engine = Engine::new(&config)?;
 
-        let component = Component::new(&engine, &component_bytes)?;
+        let component = Component::new(&engine, component_bytes)?;
 
         let mut linker = Linker::new(&engine);
 
@@ -749,7 +775,7 @@ mod test {
         let (proxy, instance) =
             proxy::Proxy::instantiate_async(&mut store, &component, &linker).await?;
 
-        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+        isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
         let (mut request_body_tx, request_body_rx) = mpsc::channel(1);
 
