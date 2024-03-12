@@ -335,7 +335,7 @@ interface types {
     /// component by e.g. `handler.handle`.
     body: func() -> body;
 
-    /// Takes onwership of the `request` and returns the `headers` and `body`.
+    /// Takes ownership of the `request` and returns the `headers` and `body`.
     into-parts: static func(this: request) -> tuple<headers, body>;
   }
 
@@ -418,7 +418,7 @@ interface types {
     /// component by e.g. `handler.handle`.
     body: func() -> body;
 
-    /// Takes onwership of the `response` and returns the `headers` and `body`.
+    /// Takes ownership of the `response` and returns the `headers` and `body`.
     into-parts: static func(this: response) -> tuple<headers, body>;
   }
 }

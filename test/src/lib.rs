@@ -494,7 +494,16 @@ mod test {
     }
 
     #[tokio::test]
-    async fn hash_all() -> Result<()> {
+    async fn hash_all_rust() -> Result<()> {
+        hash_all(&build_rust_component("hash_all").await?).await
+    }
+
+    #[tokio::test]
+    async fn hash_all_python() -> Result<()> {
+        hash_all(&build_python_component("proxy", "hash-all", "-hash-all").await?).await
+    }
+
+    async fn hash_all(component_bytes: &[u8]) -> Result<()> {
         let bodies = Arc::new(
             [
                 ("/a", "’Twas brillig, and the slithy toves"),
@@ -542,15 +551,13 @@ mod test {
             }
         });
 
-        let component_bytes = build_rust_component("hash_all").await?;
-
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.async_support(true);
 
         let engine = Engine::new(&config)?;
 
-        let component = Component::new(&engine, &component_bytes)?;
+        let component = Component::new(&engine, component_bytes)?;
 
         let mut linker = Linker::new(&engine);
 
@@ -573,7 +580,7 @@ mod test {
         let (proxy, instance) =
             proxy::Proxy::instantiate_async(&mut store, &component, &linker).await?;
 
-        isyswasfa_host::load_poll_funcs(&mut store, &component_bytes, &instance)?;
+        isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
         let request = store.data_mut().shared_table().push(Request {
             method: Method::Get,
@@ -640,11 +647,7 @@ mod test {
                     .ok_or_else(|| anyhow!("unexpected path: {path}"))?,
             );
 
-            use base64::Engine;
-            assert_eq!(
-                hash,
-                base64::engine::general_purpose::STANDARD_NO_PAD.encode(hasher.finalize())
-            );
+            assert_eq!(hash, hex::encode(hasher.finalize()));
         }
 
         Ok(())

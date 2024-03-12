@@ -120,6 +120,5 @@ async fn hash(url: &Url) -> Result<String> {
         hasher.update(&chunk);
     }
 
-    use base64::Engine;
-    Ok(base64::engine::general_purpose::STANDARD_NO_PAD.encode(hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }

@@ -8,10 +8,10 @@ async-trait = { workspace = true}
 wit-bindgen = { workspace = true}
 isyswasfa-guest = { workspace = true}
 sha2 = "0.10.8"
-base64 = "0.22.0"
 anyhow = "1.0.80"
 url = "2.5.0"
 futures = "0.3.30"
+hex = "0.4.3"
 
 [lib]
 crate-type = ["cdylib"]
