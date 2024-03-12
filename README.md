@@ -1,19 +1,19 @@
 ## isyswasfa: I sync, you sync, we all sync for async
 
-An experimental polyfill for composable concurrency based on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) and [WASI](https://github.com/WebAssembly/WASI) 0.2.x
+An experimental polyfill for composable concurrency based on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) and [WASI](https://github.com/WebAssembly/WASI) 0.2
 
 ### Background
 
-As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI 0.2.x includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI 0.3.0 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
+As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI 0.2 includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI 0.3 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
 
 ### So what is this?
 
 A pile of hacks -- but a _useful_ pile of hacks.  The goals are:
 
 - To provide early, real-world implementation feedback to the Component Model "async" design process
-- To give developers a tool for "polyfilling" composable concurrency on top of WASI 0.2.x, ideally in such a way that upgrading application code to 0.3.0 requires little or no effort
+- To give developers a tool for "polyfilling" composable concurrency on top of WASI 0.2, ideally in such a way that upgrading application code to 0.3 requires little or no effort
 
-In short, it's an experiment to see how close we can get to the 0.3.0 developer experience with minimal changes to existing tools.
+In short, it's an experiment to see how close we can get to the 0.3 developer experience with minimal changes to existing tools.
 
 ### Features
 
@@ -36,12 +36,14 @@ In short, it's an experiment to see how close we can get to the 0.3.0 developer 
 
 ### Examples
 
-The [test/rust-cases](./test/rust-cases) and [test/python-cases](./test/python-cases) directory contains a few guest programs and corresponding host code for executing them:
+The [test/rust-cases](./test/rust-cases) and [test/python-cases](./test/python-cases) directories contain a few guest programs:
 
 - **round-trip** ([Rust version](./test/rust-cases/round-trip/src/lib.rs), [Python version](./test/python-cases/round-trip/app.py)): a simple example of an exported async function calling an imported async function
 - **service** ([Rust version](./test/rust-cases/service/src/lib.rs), [Python version](./test/python-cases/service/app.py)) and **middleware** ([Rust version](./test/rust-cases/middleware/src/lib.rs)): a pair of components which are composed to demonstrate cross-component asynchronous I/O, with the middleware providing transparent `deflate` encoding and decoding support to the service.  These use `wasi:http@0.3.0-draft`, which includes a single `request` type and a single `response` type; unlike `wasi:http@0.2.0`, there is no need for incoming and outgoing variations of those types.
 - **hash-all** ([Rust version](./test/rust-cases/hash-all/src/lib.rs), [Python version](./test/python-cases/hash-all/app.py)): A `wasi:http@0.3.0-draft` component, capable of sending multiple concurrent outgoing requests, hashing the response bodies without buffering, and streaming the hashes back to the client.
 - **echo** ([Rust version](./test/rust-cases/echo/src/lib.rs), [Python version](./test/python-cases/echo/app.py)): A `wasi:http@0.3.0-draft` component, capable of either echoing the request body back to the client without buffering, or else piping the request body to an outgoing request and then streaming the response body back to the client.
+
+See also [test/src/lib.rs](./test/src/lib.rs), which uses generated host bindings to test the above examples.
 
 #### Building and running the examples
 
