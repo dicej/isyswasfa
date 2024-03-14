@@ -149,7 +149,7 @@ Viola!
 
 ### How it works
 
-I've lightly modified the `wit-bindgen` and `wasmtime-wit-bindgen` Rust code generators to support an `isyswasfa` configuration option.  When that option is enabled, the code generators "asyncify" a subset of imported and exported functions by splitting each one into two functions: one for initiating a task, and other for retrieving the result when the task has completed.  For example:
+I've lightly modified the `wit-bindgen`, and `wasmtime-wit-bindgen`, and `componentize-py` code generators to support an `isyswasfa` configuration option.  When that option is enabled, the code generators "asyncify" a subset of imported and exported functions by splitting each one into two functions: one for initiating a task, and other for retrieving the result when the task has completed.  For example:
 
 - `foo: func(s: string) -> string` becomes:
   - `foo-isyswasfa-start: func(s: string) -> result<string, pending>`, where `pending` is a resource handle representing an asynchronous task, returned if a result is not immediately available, and

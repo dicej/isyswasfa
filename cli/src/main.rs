@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 wasmtime::component::bindgen!({
     path: "../wit",
     world: "proxy",
@@ -13,7 +15,6 @@ wasmtime::component::bindgen!({
 
 use {
     anyhow::{anyhow, bail, Error, Result},
-    async_trait::async_trait,
     bytes::Bytes,
     clap::Parser,
     futures::{
@@ -28,13 +29,14 @@ use {
     isyswasfa_host::{InputStream, IsyswasfaCtx, IsyswasfaView, ReceiverStream},
     isyswasfa_http::{
         wasi::http::types::{ErrorCode, Method, Scheme},
-        Body, Fields, FieldsReceiver, Request, Response, WasiHttpState, WasiHttpView,
+        Body, Fields, FieldsReceiver, Request, Response, WasiHttpView,
     },
     std::{
+        future::Future,
         net::{IpAddr, Ipv4Addr},
         ops::Deref,
         path::PathBuf,
-        sync::{Arc, Mutex, MutexGuard},
+        sync::Arc,
     },
     tokio::{fs, net::TcpListener},
     wasmtime::{
@@ -68,146 +70,10 @@ struct Serve {
     component: PathBuf,
 }
 
-#[derive(Clone)]
-struct HttpState {
-    shared_table: Arc<Mutex<ResourceTable>>,
-    client: Arc<reqwest::Client>,
-}
-
-#[async_trait]
-impl WasiHttpState for HttpState {
-    fn shared_table(&self) -> MutexGuard<ResourceTable> {
-        self.shared_table.lock().unwrap()
-    }
-
-    async fn handle_request(
-        &self,
-        request: Resource<Request>,
-    ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>> {
-        let mut request = self.shared_table().delete(request)?;
-
-        if request.options.is_some() {
-            bail!("todo: handle outgoing request options");
-        }
-
-        if request.body.trailers.is_some() {
-            bail!("todo: handle outgoing request trailers");
-        }
-
-        let method = match request.method {
-            Method::Get => reqwest::Method::GET,
-            Method::Head => reqwest::Method::HEAD,
-            Method::Post => reqwest::Method::POST,
-            Method::Put => reqwest::Method::PUT,
-            Method::Delete => reqwest::Method::DELETE,
-            Method::Connect => reqwest::Method::CONNECT,
-            Method::Options => reqwest::Method::OPTIONS,
-            Method::Trace => reqwest::Method::TRACE,
-            Method::Patch => reqwest::Method::PATCH,
-            Method::Other(s) => match reqwest::Method::from_bytes(s.as_bytes()) {
-                Ok(method) => method,
-                Err(e) => {
-                    // TODO: map errors more precisely
-                    return Ok(Err(ErrorCode::InternalError(Some(format!("{e:?}")))));
-                }
-            },
-        };
-        let scheme = request.scheme.unwrap_or(Scheme::Http);
-        let authority = if let Some(authority) = request.authority {
-            authority
-        } else {
-            match scheme {
-                Scheme::Http => ":80",
-                Scheme::Https => ":443",
-                _ => bail!("unable to determine authority for {scheme:?}"),
-            }
-            .into()
-        };
-        let path = request.path_with_query.unwrap_or_else(|| "/".into());
-
-        let InputStream::Host(mut request_rx) = request.body.stream.take().unwrap() else {
-            todo!("handle non-`InputStream::Host` case");
-        };
-
-        let (mut request_body_tx, request_body_rx) = mpsc::channel(1);
-
-        tokio::spawn(
-            async move {
-                loop {
-                    match request_rx.read(MAX_READ_SIZE) {
-                        Ok(bytes) if bytes.is_empty() => request_rx.ready().await,
-                        Ok(bytes) => request_body_tx.send(bytes).await?,
-                        Err(StreamError::Closed) => break Ok(()),
-                        Err(e) => break Err(anyhow!("error reading response body: {e:?}")),
-                    }
-                }
-            }
-            .map(|result| {
-                if let Err(e) = result {
-                    eprintln!("error streaming request body: {e:?}");
-                }
-            }),
-        );
-
-        let response = self
-            .client
-            .request(method, format!("{scheme}://{authority}{path}"))
-            .body(reqwest::Body::wrap_stream(
-                request_body_rx.map(Ok::<_, Error>),
-            ))
-            .send()
-            .await
-            .map_err(|e| {
-                // TODO: map errors more precisely
-                ErrorCode::InternalError(Some(format!("{e:?}")))
-            })?;
-
-        let status_code = response.status().as_u16();
-        let headers = Fields(
-            response
-                .headers()
-                .iter()
-                .map(|(k, v)| (k.as_str().into(), v.as_bytes().into()))
-                .collect(),
-        );
-
-        let (mut response_body_tx, response_body_rx) = mpsc::channel(1);
-
-        tokio::spawn(
-            async move {
-                let mut stream = response.bytes_stream();
-
-                while let Some(chunk) = stream.try_next().await? {
-                    response_body_tx.send(chunk).await?;
-                }
-
-                Ok::<_, Error>(())
-            }
-            .map(|result| {
-                if let Err(e) = result {
-                    eprintln!("error streaming response body: {e:?}");
-                }
-            }),
-        );
-
-        Ok(Ok(self.shared_table().push(Response {
-            status_code,
-            headers,
-            body: Body {
-                stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
-                    response_body_rx,
-                )))),
-                // TODO: handle response trailers
-                trailers: None,
-            },
-        })?))
-    }
-}
-
 struct Ctx {
     wasi: WasiCtx,
-    isyswasfa: IsyswasfaCtx,
-    http_state: HttpState,
+    isyswasfa: IsyswasfaCtx<Ctx>,
+    client: reqwest::Client,
 }
 
 impl WasiView for Ctx {
@@ -223,20 +89,158 @@ impl WasiHttpView for Ctx {
     fn table(&mut self) -> &mut ResourceTable {
         self.isyswasfa.table()
     }
-    fn shared_table(&self) -> MutexGuard<ResourceTable> {
-        self.http_state.shared_table.lock().unwrap()
+
+    fn send_request(
+        &mut self,
+        request: Resource<Request>,
+    ) -> wasmtime::Result<
+        impl Future<
+                Output = impl FnOnce(
+                    &mut Self,
+                )
+                    -> wasmtime::Result<Result<Resource<Response>, ErrorCode>>
+                             + 'static,
+            > + Send
+            + 'static,
+    > {
+        let request = WasiHttpView::table(self).delete(request)?;
+        let client = self.client.clone();
+        Ok(async move {
+            let response = send_request(client, request).await;
+            move |self_: &mut Self| {
+                Ok(match response? {
+                    Ok(response) => Ok(WasiHttpView::table(self_).push(response)?),
+                    Err(e) => Err(e),
+                })
+            }
+        })
     }
 }
 
 impl IsyswasfaView for Ctx {
-    type State = HttpState;
-
-    fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
+    fn isyswasfa(&mut self) -> &mut IsyswasfaCtx<Ctx> {
         &mut self.isyswasfa
     }
-    fn state(&self) -> Self::State {
-        self.http_state.clone()
+}
+
+async fn send_request(
+    client: reqwest::Client,
+    mut request: Request,
+) -> wasmtime::Result<Result<Response, ErrorCode>> {
+    if request.options.is_some() {
+        bail!("todo: handle outgoing request options");
     }
+
+    if request.body.trailers.is_some() {
+        bail!("todo: handle outgoing request trailers");
+    }
+
+    let method = match request.method {
+        Method::Get => reqwest::Method::GET,
+        Method::Head => reqwest::Method::HEAD,
+        Method::Post => reqwest::Method::POST,
+        Method::Put => reqwest::Method::PUT,
+        Method::Delete => reqwest::Method::DELETE,
+        Method::Connect => reqwest::Method::CONNECT,
+        Method::Options => reqwest::Method::OPTIONS,
+        Method::Trace => reqwest::Method::TRACE,
+        Method::Patch => reqwest::Method::PATCH,
+        Method::Other(s) => match reqwest::Method::from_bytes(s.as_bytes()) {
+            Ok(method) => method,
+            Err(e) => {
+                // TODO: map errors more precisely
+                return Ok(Err(ErrorCode::InternalError(Some(format!("{e:?}")))));
+            }
+        },
+    };
+    let scheme = request.scheme.unwrap_or(Scheme::Http);
+    let authority = if let Some(authority) = request.authority {
+        authority
+    } else {
+        match scheme {
+            Scheme::Http => ":80",
+            Scheme::Https => ":443",
+            _ => bail!("unable to determine authority for {scheme:?}"),
+        }
+        .into()
+    };
+    let path = request.path_with_query.unwrap_or_else(|| "/".into());
+
+    let InputStream::Host(mut request_rx) = request.body.stream.take().unwrap() else {
+        todo!("handle non-`InputStream::Host` case");
+    };
+
+    let (mut request_body_tx, request_body_rx) = mpsc::channel(1);
+
+    tokio::spawn(
+        async move {
+            loop {
+                match request_rx.read(MAX_READ_SIZE) {
+                    Ok(bytes) if bytes.is_empty() => request_rx.ready().await,
+                    Ok(bytes) => request_body_tx.send(bytes).await?,
+                    Err(StreamError::Closed) => break Ok(()),
+                    Err(e) => break Err(anyhow!("error reading response body: {e:?}")),
+                }
+            }
+        }
+        .map(|result| {
+            if let Err(e) = result {
+                eprintln!("error streaming request body: {e:?}");
+            }
+        }),
+    );
+
+    let response = client
+        .request(method, format!("{scheme}://{authority}{path}"))
+        .body(reqwest::Body::wrap_stream(
+            request_body_rx.map(Ok::<_, Error>),
+        ))
+        .send()
+        .await
+        .map_err(|e| {
+            // TODO: map errors more precisely
+            ErrorCode::InternalError(Some(format!("{e:?}")))
+        })?;
+
+    let status_code = response.status().as_u16();
+    let headers = Fields(
+        response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.as_str().into(), v.as_bytes().into()))
+            .collect(),
+    );
+
+    let (mut response_body_tx, response_body_rx) = mpsc::channel(1);
+
+    tokio::spawn(
+        async move {
+            let mut stream = response.bytes_stream();
+
+            while let Some(chunk) = stream.try_next().await? {
+                response_body_tx.send(chunk).await?;
+            }
+
+            Ok::<_, Error>(())
+        }
+        .map(|result| {
+            if let Err(e) = result {
+                eprintln!("error streaming response body: {e:?}");
+            }
+        }),
+    );
+
+    Ok(Ok(Response {
+        status_code,
+        headers,
+        body: Body {
+            stream: Some(InputStream::Host(Box::new(ReceiverStream::new(
+                response_body_rx,
+            )))),
+            // TODO: handle response trailers
+            trailers: None,
+        },
+    }))
 }
 
 async fn handle_request(
@@ -250,10 +254,7 @@ async fn handle_request(
         Ctx {
             wasi: WasiCtxBuilder::new().inherit_stdio().build(),
             isyswasfa: IsyswasfaCtx::new(),
-            http_state: HttpState {
-                shared_table: Arc::new(Mutex::new(ResourceTable::new())),
-                client: Arc::new(reqwest::Client::new()),
-            },
+            client: reqwest::Client::new(),
         },
     );
 
@@ -265,7 +266,7 @@ async fn handle_request(
 
     let (request_trailers_tx, request_trailers_rx) = oneshot::channel();
 
-    let wasi_request = store.data_mut().shared_table().push(Request {
+    let wasi_request = WasiHttpView::table(store.data_mut()).push(Request {
         method: match request.method() {
             &http::Method::GET => Method::Get,
             &http::Method::POST => Method::Post,
@@ -341,7 +342,7 @@ async fn handle_request(
 
     while let Some(event) = futures.try_next().await? {
         if let Some((response, mut store)) = event {
-            let response = store.data_mut().shared_table().delete(response)?;
+            let response = WasiHttpView::table(store.data_mut()).delete(response)?;
 
             let mut body = response.body;
 

@@ -4,7 +4,6 @@
 mod test {
     use {
         anyhow::{anyhow, bail, Error, Result},
-        async_trait::async_trait,
         bytes::Bytes,
         futures::{
             channel::{mpsc, oneshot},
@@ -16,16 +15,11 @@ mod test {
         isyswasfa_host::{IsyswasfaCtx, IsyswasfaView, ReceiverStream},
         isyswasfa_http::{
             wasi::http::types::{ErrorCode, Method, Scheme},
-            Body, Fields, FieldsReceiver, Request, Response, WasiHttpState, WasiHttpView,
+            Body, Fields, FieldsReceiver, Request, Response, WasiHttpView,
         },
         sha2::{Digest, Sha256},
         std::{
-            collections::HashMap,
-            io::Write,
-            iter,
-            path::Path,
-            str,
-            sync::{Arc, Mutex, MutexGuard},
+            collections::HashMap, future::Future, io::Write, iter, path::Path, str, sync::Arc,
             time::Duration,
         },
         tempfile::NamedTempFile,
@@ -136,44 +130,13 @@ mod test {
         Ok(fs::read(tmp.path()).await?)
     }
 
-    type RequestSender = Arc<
-        dyn Fn(
-                &HttpState,
-                Resource<Request>,
-            )
-                -> BoxFuture<'static, wasmtime::Result<Result<Resource<Response>, ErrorCode>>>
-            + Send
-            + Sync,
-    >;
-
-    #[derive(Clone)]
-    struct HttpState {
-        shared_table: Arc<Mutex<ResourceTable>>,
-        send_request: Option<RequestSender>,
-    }
-
-    #[async_trait]
-    impl WasiHttpState for HttpState {
-        fn shared_table(&self) -> MutexGuard<ResourceTable> {
-            self.shared_table.lock().unwrap()
-        }
-
-        async fn handle_request(
-            &self,
-            request: Resource<Request>,
-        ) -> wasmtime::Result<Result<Resource<Response>, ErrorCode>> {
-            if let Some(send_request) = self.send_request.clone() {
-                send_request(self, request).await
-            } else {
-                bail!("no outbound request handler available")
-            }
-        }
-    }
+    type RequestSender =
+        Arc<dyn Fn(Request) -> BoxFuture<'static, Result<Response, ErrorCode>> + Send + Sync>;
 
     struct Ctx {
         wasi: WasiCtx,
-        isyswasfa: IsyswasfaCtx,
-        http_state: HttpState,
+        isyswasfa: IsyswasfaCtx<Ctx>,
+        send_request: Option<RequestSender>,
     }
 
     impl WasiView for Ctx {
@@ -189,27 +152,55 @@ mod test {
         fn table(&mut self) -> &mut ResourceTable {
             self.isyswasfa.table()
         }
-        fn shared_table(&self) -> MutexGuard<ResourceTable> {
-            self.http_state.shared_table.lock().unwrap()
+        fn send_request(
+            &mut self,
+            request: Resource<Request>,
+        ) -> wasmtime::Result<
+            impl Future<
+                    Output = impl FnOnce(
+                        &mut Self,
+                    )
+                        -> wasmtime::Result<Result<Resource<Response>, ErrorCode>>
+                                 + 'static,
+                > + Send
+                + 'static,
+        > {
+            if let Some(send_request) = self.send_request.clone() {
+                let request = WasiHttpView::table(self).delete(request)?;
+                Ok(async move {
+                    let response = send_request(request).await;
+                    move |self_: &mut Self| {
+                        Ok(match response {
+                            Ok(response) => Ok(WasiHttpView::table(self_).push(response)?),
+                            Err(e) => Err(e),
+                        })
+                    }
+                })
+            } else {
+                bail!("no outbound request handler available")
+            }
         }
     }
 
     impl IsyswasfaView for Ctx {
-        type State = HttpState;
-
-        fn isyswasfa(&mut self) -> &mut IsyswasfaCtx {
+        fn isyswasfa(&mut self) -> &mut IsyswasfaCtx<Ctx> {
             &mut self.isyswasfa
-        }
-        fn state(&self) -> Self::State {
-            self.http_state.clone()
         }
     }
 
-    #[async_trait]
     impl round_trip::component::test::baz::Host for Ctx {
-        async fn foo(_state: HttpState, s: String) -> wasmtime::Result<String> {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            Ok(format!("{s} - entered host - exited host"))
+        fn foo(
+            &mut self,
+            s: String,
+        ) -> wasmtime::Result<
+            impl Future<Output = impl FnOnce(&mut Self) -> wasmtime::Result<String> + 'static>
+                + Send
+                + 'static,
+        > {
+            Ok(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                move |_: &mut Self| Ok(format!("{s} - entered host - exited host"))
+            })
         }
     }
 
@@ -244,10 +235,7 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                http_state: HttpState {
-                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
-                    send_request: None,
-                },
+                send_request: None,
             },
         );
 
@@ -367,10 +355,7 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                http_state: HttpState {
-                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
-                    send_request: None,
-                },
+                send_request: None,
             },
         );
 
@@ -405,7 +390,7 @@ mod test {
 
         _ = request_trailers_tx.send(Fields(trailers.clone()));
 
-        let request = store.data_mut().shared_table().push(Request {
+        let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Post,
             scheme: Some(Scheme::Http),
             path_with_query: Some("/foo".into()),
@@ -438,7 +423,7 @@ mod test {
             .call_handle(&mut store, request)
             .await??;
 
-        let mut response = store.data_mut().shared_table().delete(response)?;
+        let mut response = WasiHttpView::table(store.data_mut()).delete(response)?;
 
         assert!(response.status_code == 200);
 
@@ -518,13 +503,10 @@ mod test {
         let send_request = Arc::new({
             let bodies = bodies.clone();
 
-            move |state: &HttpState, request: Resource<Request>| {
-                let table = state.shared_table.clone();
+            move |request: Request| {
                 let bodies = bodies.clone();
 
                 async move {
-                    let request = table.lock().unwrap().delete(request)?;
-
                     let (status_code, rx) = if let (Method::Get, Some(body)) = (
                         request.method,
                         request.path_with_query.and_then(|p| bodies.get(p.as_str())),
@@ -538,14 +520,14 @@ mod test {
                         (405, mpsc::channel(1).1)
                     };
 
-                    Ok(Ok(table.lock().unwrap().push(Response {
+                    Ok(Response {
                         status_code,
                         headers: Fields(Vec::new()),
                         body: Body {
                             stream: Some(InputStream::Host(Box::new(ReceiverStream::new(rx)))),
                             trailers: None,
                         },
-                    })?))
+                    })
                 }
                 .boxed()
             }
@@ -570,10 +552,7 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                http_state: HttpState {
-                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
-                    send_request: Some(send_request),
-                },
+                send_request: Some(send_request),
             },
         );
 
@@ -582,7 +561,7 @@ mod test {
 
         isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
-        let request = store.data_mut().shared_table().push(Request {
+        let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Get,
             scheme: Some(Scheme::Http),
             path_with_query: Some("/".into()),
@@ -607,7 +586,7 @@ mod test {
             .call_handle(&mut store, request)
             .await??;
 
-        let mut response = store.data_mut().shared_table().delete(response)?;
+        let mut response = WasiHttpView::table(store.data_mut()).delete(response)?;
 
         assert!(response.status_code == 200);
 
@@ -680,12 +659,8 @@ mod test {
 
     async fn double_echo(component_bytes: &[u8]) -> Result<()> {
         let send_request = Arc::new({
-            move |state: &HttpState, request: Resource<Request>| {
-                let table = state.shared_table.clone();
-
+            move |request: Request| {
                 async move {
-                    let request = table.lock().unwrap().delete(request)?;
-
                     let (status_code, body) = if let (Method::Post, Some("/echo")) =
                         (request.method, request.path_with_query.as_deref())
                     {
@@ -702,7 +677,7 @@ mod test {
                         )
                     };
 
-                    Ok(Ok(table.lock().unwrap().push(Response {
+                    Ok(Response {
                         status_code,
                         headers: Fields(
                             request
@@ -713,7 +688,7 @@ mod test {
                                 .collect(),
                         ),
                         body,
-                    })?))
+                    })
                 }
                 .boxed()
             }
@@ -765,10 +740,7 @@ mod test {
             Ctx {
                 wasi: WasiCtxBuilder::new().inherit_stdio().build(),
                 isyswasfa: IsyswasfaCtx::new(),
-                http_state: HttpState {
-                    shared_table: Arc::new(Mutex::new(ResourceTable::new())),
-                    send_request,
-                },
+                send_request,
             },
         );
 
@@ -798,7 +770,7 @@ mod test {
             Ok::<_, Error>(Event::RequestBody)
         };
 
-        let request = store.data_mut().shared_table().push(Request {
+        let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Post,
             scheme: Some(Scheme::Http),
             path_with_query: Some(uri.into()),
@@ -842,7 +814,7 @@ mod test {
                     response,
                     mut store,
                 } => {
-                    let mut response = store.data_mut().shared_table().delete(response)?;
+                    let mut response = WasiHttpView::table(store.data_mut()).delete(response)?;
 
                     assert!(response.status_code == 200);
 
