@@ -1284,6 +1284,7 @@ dependencies = [
  "indexmap",
  "isyswasfa-host",
  "isyswasfa-http",
+ "pretty_env_logger",
  "reqwest",
  "sha2",
  "tempfile",

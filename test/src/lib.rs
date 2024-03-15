@@ -19,7 +19,13 @@ mod test {
         },
         sha2::{Digest, Sha256},
         std::{
-            collections::HashMap, future::Future, io::Write, iter, path::Path, str, sync::Arc,
+            collections::HashMap,
+            future::Future,
+            io::Write,
+            iter,
+            path::Path,
+            str,
+            sync::{Arc, Once},
             time::Duration,
         },
         tempfile::NamedTempFile,
@@ -60,7 +66,14 @@ mod test {
         });
     }
 
+    fn init_logger() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| pretty_env_logger::init());
+    }
+
     async fn build_rust_component(name: &str) -> Result<Vec<u8>> {
+        init_logger();
+
         static BUILD: OnceCell<()> = OnceCell::const_new();
 
         BUILD
@@ -68,7 +81,13 @@ mod test {
                 assert!(
                     Command::new("cargo")
                         .current_dir("rust-cases")
-                        .args(["build", "--workspace", "--target", "wasm32-wasi"])
+                        .args([
+                            "build",
+                            "--release",
+                            "--workspace",
+                            "--target",
+                            "wasm32-wasi"
+                        ])
                         .status()
                         .await
                         .unwrap()
@@ -105,7 +124,7 @@ mod test {
 
         ComponentEncoder::default()
             .validate(true)
-            .module(&fs::read(format!("rust-cases/target/wasm32-wasi/debug/{name}.wasm")).await?)?
+            .module(&fs::read(format!("rust-cases/target/wasm32-wasi/release/{name}.wasm")).await?)?
             .adapter("wasi_snapshot_preview1", &fs::read(ADAPTER_PATH).await?)?
             .encode()
     }
@@ -115,6 +134,8 @@ mod test {
         name: &str,
         isyswasfa_suffix: &str,
     ) -> Result<Vec<u8>> {
+        init_logger();
+
         let tmp = NamedTempFile::new()?;
         componentize_py::componentize(
             Some(Path::new("../wit")),
@@ -259,13 +280,14 @@ mod test {
 
     #[tokio::test]
     async fn service_rust() -> Result<()> {
-        service_test(&build_rust_component("service").await?, false).await
+        service_test(&build_rust_component("service").await?, "/service", false).await
     }
 
     #[tokio::test]
     async fn service_python() -> Result<()> {
         service_test(
             &build_python_component("proxy", "service", "-service").await?,
+            "/service",
             false,
         )
         .await
@@ -282,6 +304,11 @@ mod test {
     }
 
     async fn middleware(service: &[u8]) -> Result<()> {
+        use wasm_compose::{
+            composer::ComponentComposer,
+            config::{Config, Instantiation, InstantiationArg},
+        };
+
         let dir = tempfile::tempdir()?;
 
         let service_file = dir.path().join("service.wasm");
@@ -290,11 +317,6 @@ mod test {
         let middleware = build_rust_component("middleware").await?;
         let middleware_file = dir.path().join("middleware.wasm");
         fs::write(&middleware_file, &middleware).await?;
-
-        use wasm_compose::{
-            composer::ComponentComposer,
-            config::{Config, Instantiation, InstantiationArg},
-        };
 
         let composed = &ComponentComposer::new(
             &middleware_file,
@@ -327,10 +349,10 @@ mod test {
         )
         .compose()?;
 
-        service_test(composed, true).await
+        service_test(composed, "/middleware", true).await
     }
 
-    async fn service_test(component_bytes: &[u8], use_compression: bool) -> Result<()> {
+    async fn service_test(component_bytes: &[u8], uri: &str, use_compression: bool) -> Result<()> {
         use flate2::{
             write::{DeflateDecoder, DeflateEncoder},
             Compression,
@@ -393,7 +415,7 @@ mod test {
         let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Post,
             scheme: Some(Scheme::Http),
-            path_with_query: Some("/foo".into()),
+            path_with_query: Some(uri.into()),
             authority: Some("localhost".into()),
             headers: Fields(
                 headers
@@ -564,7 +586,7 @@ mod test {
         let request = WasiHttpView::table(store.data_mut()).push(Request {
             method: Method::Get,
             scheme: Some(Scheme::Http),
-            path_with_query: Some("/".into()),
+            path_with_query: Some("/hash-all".into()),
             authority: Some("localhost".into()),
             headers: Fields(
                 bodies
@@ -649,15 +671,19 @@ mod test {
 
     #[tokio::test]
     async fn double_echo_rust() -> Result<()> {
-        double_echo(&build_rust_component("echo").await?).await
+        double_echo(&build_rust_component("echo").await?, "/double-echo").await
     }
 
     #[tokio::test]
     async fn double_echo_python() -> Result<()> {
-        double_echo(&build_python_component("proxy", "echo", "-echo").await?).await
+        double_echo(
+            &build_python_component("proxy", "echo", "-echo").await?,
+            "/double-echo",
+        )
+        .await
     }
 
-    async fn double_echo(component_bytes: &[u8]) -> Result<()> {
+    async fn double_echo(component_bytes: &[u8], uri: &str) -> Result<()> {
         let send_request = Arc::new({
             move |request: Request| {
                 async move {
@@ -694,12 +720,7 @@ mod test {
             }
         });
 
-        echo_test(
-            component_bytes,
-            "/double-echo",
-            Some(("/echo", send_request)),
-        )
-        .await
+        echo_test(component_bytes, uri, Some(("/echo", send_request))).await
     }
 
     async fn echo_test(
@@ -868,5 +889,117 @@ mod test {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn router() -> Result<()> {
+        use wasm_compose::{
+            composer::ComponentComposer,
+            config::{Config, Instantiation, InstantiationArg},
+        };
+
+        let composed = &{
+            let dir = tempfile::tempdir()?;
+
+            let echo = build_rust_component("echo").await?;
+            let echo_file = dir.path().join("echo.wasm");
+            fs::write(&echo_file, &echo).await?;
+
+            let hash_all = build_rust_component("hash_all").await?;
+            let hash_all_file = dir.path().join("hash-all.wasm");
+            fs::write(&hash_all_file, &hash_all).await?;
+
+            let service = build_rust_component("service").await?;
+            let service_file = dir.path().join("service.wasm");
+            fs::write(&service_file, &service).await?;
+
+            let middleware = build_rust_component("middleware").await?;
+            let middleware_file = dir.path().join("middleware.wasm");
+            fs::write(&middleware_file, &middleware).await?;
+
+            let router = build_rust_component("router").await?;
+            let router_file = dir.path().join("router.wasm");
+            fs::write(&router_file, &router).await?;
+
+            ComponentComposer::new(
+                &router_file,
+                &Config {
+                    dir: dir.path().to_owned(),
+                    definitions: Vec::new(),
+                    search_paths: Vec::new(),
+                    skip_validation: false,
+                    import_components: false,
+                    disallow_imports: false,
+                    dependencies: IndexMap::new(),
+                    instantiations: [
+                        (
+                            "root".to_owned(),
+                            Instantiation {
+                                dependency: None,
+                                arguments: [
+                                    (
+                                        "echo".to_owned(),
+                                        InstantiationArg {
+                                            instance: "echo".into(),
+                                            export: Some("wasi:http/handler@0.3.0-draft".into()),
+                                        },
+                                    ),
+                                    (
+                                        "hash-all".to_owned(),
+                                        InstantiationArg {
+                                            instance: "hash-all".into(),
+                                            export: Some("wasi:http/handler@0.3.0-draft".into()),
+                                        },
+                                    ),
+                                    (
+                                        "service".to_owned(),
+                                        InstantiationArg {
+                                            instance: "service".into(),
+                                            export: Some("wasi:http/handler@0.3.0-draft".into()),
+                                        },
+                                    ),
+                                    (
+                                        "middleware".to_owned(),
+                                        InstantiationArg {
+                                            instance: "middleware".into(),
+                                            export: Some("wasi:http/handler@0.3.0-draft".into()),
+                                        },
+                                    ),
+                                ]
+                                .into_iter()
+                                .collect(),
+                            },
+                        ),
+                        (
+                            "middleware".to_owned(),
+                            Instantiation {
+                                dependency: None,
+                                arguments: [(
+                                    "wasi:http/handler@0.3.0-draft".to_owned(),
+                                    InstantiationArg {
+                                        instance: "service".into(),
+                                        export: Some("wasi:http/handler@0.3.0-draft".into()),
+                                    },
+                                )]
+                                .into_iter()
+                                .collect(),
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+            )
+            .compose()?
+        };
+
+        fs::write("/tmp/composed.wasm", composed).await?;
+
+        echo_test(composed, "/echo", None).await?;
+        double_echo(composed, "/double-echo").await?;
+        double_echo(composed, "/proxy").await?;
+        hash_all(composed).await?;
+        service_test(composed, "/service", false).await?;
+        middleware(composed).await
     }
 }

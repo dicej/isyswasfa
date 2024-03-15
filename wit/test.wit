@@ -15,3 +15,33 @@ world proxy {
   import wasi:http/handler@0.3.0-draft;  
   export wasi:http/handler@0.3.0-draft;
 }
+
+world router {
+  import isyswasfa:io/pipe;
+  import wasi:http/handler@0.3.0-draft;  
+  export wasi:http/handler@0.3.0-draft;
+
+  import echo: interface {
+    use wasi:http/types@0.3.0-draft.{request, response, error-code};
+
+    handle: func(request: request) -> result<response, error-code>;
+  }
+
+  import hash-all: interface {
+    use wasi:http/types@0.3.0-draft.{request, response, error-code};
+
+    handle: func(request: request) -> result<response, error-code>;
+  }
+
+  import service: interface {
+    use wasi:http/types@0.3.0-draft.{request, response, error-code};
+
+    handle: func(request: request) -> result<response, error-code>;
+  }
+
+  import middleware: interface {
+    use wasi:http/types@0.3.0-draft.{request, response, error-code};
+
+    handle: func(request: request) -> result<response, error-code>;
+  }
+}

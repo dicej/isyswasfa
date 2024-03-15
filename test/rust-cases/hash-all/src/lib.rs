@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 mod bindings {
     wit_bindgen::generate!({
         path: "../../../wit",

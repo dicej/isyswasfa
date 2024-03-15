@@ -5,7 +5,8 @@ members = [
   "hash-all",
   "middleware",
   "service",
-  "round-trip"
+  "round-trip",
+  "router"
 ]
 
 [workspace.dependencies]

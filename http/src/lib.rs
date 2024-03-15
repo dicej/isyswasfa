@@ -24,7 +24,7 @@ use {
     anyhow::anyhow,
     futures::channel::oneshot,
     isyswasfa_host::IsyswasfaView,
-    std::{fmt, future::Future},
+    std::{fmt, future::Future, mem},
     wasi::http::types::{ErrorCode, HeaderError, Method, RequestOptionsError, Scheme},
     wasmtime::component::{Linker, Resource, ResourceTable},
     wasmtime_wasi::preview2::{bindings::wasi::io::error::Error, InputStream},
@@ -189,9 +189,13 @@ impl<T: WasiHttpView> wasi::http::types::HostFields for T {
         &mut self,
         this: Resource<Fields>,
         key: String,
-    ) -> wasmtime::Result<Result<(), HeaderError>> {
-        self.table().get_mut(&this)?.0.retain(|(k, _)| *k != key);
-        Ok(Ok(()))
+    ) -> wasmtime::Result<Result<Vec<Vec<u8>>, HeaderError>> {
+        let fields = self.table().get_mut(&this)?;
+        let (matched, unmatched) = mem::take(&mut fields.0)
+            .into_iter()
+            .partition(|(k, _)| *k == key);
+        fields.0 = unmatched;
+        Ok(Ok(matched.into_iter().map(|(_, v)| v).collect()))
     }
 
     fn append(
