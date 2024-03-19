@@ -91,25 +91,16 @@ curl -i \
     http://127.0.0.1:8080/
 ```
 
-To build the Python examples, you'll need to build this project's temporary fork of `componentize-py`, which requires a `wasi-sockets`-enabled build of `wasi-sdk` (replace `linux` with `macos` or `mingw` (Windows) as appropriate):
+To build the Python examples, you'll need to use `componentize-py`, which you can install with `pip`:
 
 ```shell
-curl -LO https://github.com/dicej/wasi-sdk/releases/download/wasi-sockets-alpha-2/wasi-sdk-20.26g68203b20b82e-linux.tar.gz
-tar xf tar xf wasi-sdk-20.26g68203b20b82e-linux.tar.gz
-sudo mv wasi-sdk-20.26g68203b20b82e /opt/wasi-sdk
-export WASI_SDK_PATH=/opt/wasi-sdk
+pip install componentize-py==0.13.0
 ```
 
-Then run:
+Then build and run the Python `hash-all` example:
 
 ```shell
-cargo build --release --manifest-path componentize-py/Cargo.toml
-```
-
-And finally build and run the Python `hash-all` example:
-
-```shell
-./componentize-py/target/release/componentize-py --isyswasfa=-echo -d wit -w proxy componentize -p test/python-cases/hash-all app -o hash-all.wasm
+componentize-py --isyswasfa=-echo -d wit -w proxy componentize -p test/python-cases/hash-all app -o hash-all.wasm
 ./target/release/isyswasfa serve hash-all.wasm
 ```
 
