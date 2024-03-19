@@ -7,8 +7,8 @@ edition = "2021"
 anyhow = { version = "1.0.79", features = ["backtrace"] }
 clap = { version = "4.5.2", features = ["derive"] }
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros", "process", "fs", "time"] }
-wasmtime = { path = "../wasmtime/crates/wasmtime" }
-wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", features = ["component-model"] }
+wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 isyswasfa-host = { path = "../host" }
 isyswasfa-http = { path = "../http" }
 hyper = { version = "1.2.0", features = ["server", "http1"] }

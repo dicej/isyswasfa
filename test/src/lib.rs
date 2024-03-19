@@ -68,7 +68,7 @@ mod test {
 
     fn init_logger() {
         static ONCE: Once = Once::new();
-        ONCE.call_once(|| pretty_env_logger::init());
+        ONCE.call_once(pretty_env_logger::init);
     }
 
     async fn build_rust_component(name: &str) -> Result<Vec<u8>> {
@@ -146,6 +146,7 @@ mod test {
             tmp.path(),
             None,
             Some(isyswasfa_suffix),
+            false,
         )
         .await?;
         Ok(fs::read(tmp.path()).await?)

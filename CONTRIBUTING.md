@@ -3,7 +3,8 @@
 ### Prerequisites
 
 - Unix-like environment
-- Rust
+- Rust stable 1.71 or later *and* nightly 2023-07-27 or later, including the `wasm32-wasi` and `wasm32-unknown-unknown` targets
+    - See https://github.com/bytecodealliance/componentize-py/blob/main/CONTRIBUTING.md for details
 
 First, make sure you have all the submodules cloned:
 

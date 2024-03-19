@@ -4,8 +4,7 @@ members = [
   "cli",
   "host",
   "http",
-  "test",
-  "transform",
+  "test"
 ]
 exclude = [
   "guest",

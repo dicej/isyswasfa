@@ -11,5 +11,5 @@ futures = "0.3.30"
 once_cell = "1.19.0"
 tracing = "0.1.40"
 wasmparser = "0.120.0"
-wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
-wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", features = ["component-model"] }
+wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }

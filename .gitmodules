@@ -1,12 +1,6 @@
 [submodule "wit-bindgen"]
 	path = wit-bindgen
 	url = https://github.com/dicej/wit-bindgen
-[submodule "wasmtime"]
-	path = wasmtime
-	url = https://github.com/dicej/wasmtime
 [submodule "wasm-tools"]
 	path = wasm-tools
 	url = https://github.com/dicej/wasm-tools
-[submodule "componentize-py"]
-	path = componentize-py
-	url = https://github.com/bytecodealliance/componentize-py

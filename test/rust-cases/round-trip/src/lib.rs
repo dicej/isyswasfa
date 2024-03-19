@@ -1,14 +1,16 @@
 #![deny(warnings)]
 
+#[allow(warnings)]
 mod bindings {
     wit_bindgen::generate!({
         path: "../../../wit",
         world: "round-trip",
-        isyswasfa: "-round-trip",
-        exports: {
-            "component:test/baz": super::Component
-        }
+        isyswasfa: "-round-trip"
     });
+
+    use super::Component;
+    impl Guest for Component {}
+    export!(Component);
 }
 
 use {

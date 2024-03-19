@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1.77"
-wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
-wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", features = ["component-model"] }
+wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 isyswasfa-host = { path = "../host" }
 futures = "0.3.30"
 anyhow = "1.0.80"

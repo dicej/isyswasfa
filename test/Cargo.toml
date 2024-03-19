@@ -8,8 +8,8 @@ anyhow = { version = "1.0.79", features = ["backtrace"] }
 async-trait = "0.1.77"
 tokio = { version = "1.35.1", features = ["rt-multi-thread", "macros", "process", "fs", "time"] }
 wasmparser = "0.119.0"
-wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
-wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", features = ["component-model"] }
+wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 isyswasfa-host = { path = "../host" }
 isyswasfa-http = { path = "../http" }
 wit-component = "0.20.0"
@@ -20,7 +20,7 @@ wasm-compose = { path = "../wasm-tools/crates/wasm-compose" }
 tempfile = "3.9.0"
 indexmap = "2.2.1"
 flate2 = "1.0.28"
-componentize-py = { path = "../componentize-py" }
+componentize-py = { git = "https://github.com/bytecodealliance/componentize-py", branch = "isyswasfa-and-stub-wasi" }
 sha2 = "0.10.8"
 hex = "0.4.3"
 pretty_env_logger = "0.5.0"

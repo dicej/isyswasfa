@@ -14,13 +14,12 @@ mod bindings {
 
                 export dummy: func(input: poll-input) -> poll-output;
             }
-        ",
-        exports: {
-            world: World
-        }
+        "
     });
 
     struct World;
+
+    export!(World);
 
     impl Guest for World {
         fn dummy(_input: PollInput) -> PollOutput {

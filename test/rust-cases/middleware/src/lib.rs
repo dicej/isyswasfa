@@ -1,14 +1,16 @@
 #![deny(warnings)]
 
+#[allow(warnings)]
 mod bindings {
     wit_bindgen::generate!({
         path: "../../../wit",
         world: "proxy",
-        isyswasfa: "-middleware",
-        exports: {
-            "wasi:http/handler": super::Component
-        }
+        isyswasfa: "-middleware"
     });
+
+    use super::Component;
+    impl Guest for Component {}
+    export!(Component);
 }
 
 use {
