@@ -387,7 +387,7 @@ mod test {
 
         isyswasfa_host::load_poll_funcs(&mut store, component_bytes, &instance)?;
 
-        let headers = vec![("foo".into(), b"bar".into())];
+        let headers = [("foo".into(), b"bar".into())];
 
         let body = b"And the mome raths outgrabe";
 

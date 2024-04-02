@@ -60,6 +60,7 @@ use {
         mem,
         ops::{Deref, DerefMut},
         pin::Pin,
+        ptr,
         rc::Rc,
         sync::Arc,
         task::{Context, Poll, Wake},
@@ -126,7 +127,7 @@ fn push_output(output: PollOutput) {
 }
 
 fn take_output() -> Vec<PollOutput> {
-    unsafe { mem::take(&mut POLL_OUTPUT) }
+    unsafe { mem::take(&mut *ptr::addr_of_mut!(POLL_OUTPUT)) }
 }
 
 static mut PENDING: Vec<PendingState> = Vec::new();
@@ -142,7 +143,7 @@ fn set_pending(pending: Vec<PendingState>) {
 }
 
 fn take_pending() -> Vec<PendingState> {
-    unsafe { mem::take(&mut PENDING) }
+    unsafe { mem::take(&mut *ptr::addr_of_mut!(PENDING)) }
 }
 
 fn clear_pending() {

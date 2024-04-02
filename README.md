@@ -51,6 +51,7 @@ See also [test/src/lib.rs](./test/src/lib.rs), which uses generated host binding
 To build the CLI from source using this Git repository, [install Rust](https://rustup.rs/) and run:
 
 ```shell
+git submodule update --init --recursive
 cargo build --release --manifest-path cli/Cargo.toml
 ```
 
@@ -72,7 +73,7 @@ We can build the Rust `hash-all` example using:
 ```shell
 cargo build --release --target wasm32-wasi --manifest-path test/rust-cases/hash-all/Cargo.toml
 curl -LO https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.2/wasi_snapshot_preview1.reactor.wasm
-wasm-tools component new --adapt wasi_snapshot_preview1.reactor.wasm test/rust-cases/target/wasm32-wasi/debug/hash_all.wasm -o hash-all.wasm
+wasm-tools component new --adapt wasi_snapshot_preview1.reactor.wasm test/rust-cases/target/wasm32-wasi/release/hash_all.wasm -o hash-all.wasm
 ```
 
 And finally we can run it:
