@@ -23,12 +23,12 @@ mod test {
             future::Future,
             io::Write,
             iter,
-            path::Path,
+            // path::Path,
             str,
             sync::{Arc, Once},
             time::Duration,
         },
-        tempfile::NamedTempFile,
+        // tempfile::NamedTempFile,
         tokio::{fs, process::Command, sync::OnceCell},
         wasmtime::{
             component::{Component, Linker, Resource, ResourceTable},
@@ -136,20 +136,23 @@ mod test {
     ) -> Result<Vec<u8>> {
         init_logger();
 
-        let tmp = NamedTempFile::new()?;
-        componentize_py::componentize(
-            Some(Path::new("../wit")),
-            Some(world),
-            &[&format!("python-cases/{name}")],
-            &[],
-            "app",
-            tmp.path(),
-            None,
-            Some(isyswasfa_suffix),
-            false,
-        )
-        .await?;
-        Ok(fs::read(tmp.path()).await?)
+        _ = (world, name, isyswasfa_suffix);
+        bail!("python support disabled");
+
+        // let tmp = NamedTempFile::new()?;
+        // componentize_py::componentize(
+        //     Some(Path::new("../wit")),
+        //     Some(world),
+        //     &[&format!("python-cases/{name}")],
+        //     &[],
+        //     "app",
+        //     tmp.path(),
+        //     None,
+        //     Some(isyswasfa_suffix),
+        //     false,
+        // )
+        // .await?;
+        // Ok(fs::read(tmp.path()).await?)
     }
 
     type RequestSender =

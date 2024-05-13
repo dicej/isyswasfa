@@ -20,7 +20,6 @@ wasm-compose = { path = "../wasm-tools/crates/wasm-compose" }
 tempfile = "3.9.0"
 indexmap = "2.2.1"
 flate2 = "1.0.28"
-componentize-py = { git = "https://github.com/bytecodealliance/componentize-py", branch = "isyswasfa-and-stub-wasi" }
 sha2 = "0.10.8"
 hex = "0.4.3"
 pretty_env_logger = "0.5.0"
