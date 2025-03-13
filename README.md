@@ -2,6 +2,8 @@
 
 An experimental polyfill for composable concurrency based on the [WebAssembly Component Model](https://github.com/WebAssembly/component-model) and [WASI](https://github.com/WebAssembly/WASI) 0.2
 
+**NOTE: This project is not being maintained.  We've shifted our focus to developing WASIp3 and the underlying Component Model async support upstream in the [component-model](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Async.md), [wasip3-prototyping](https://github.com/bytecodealliance/wasip3-prototyping) (with incremental upstreaming to the main Wasmtime repo), [wasm-tools](https://github.com/bytecodealliance/wasm-tools), and [wit-bindgen](https://github.com/bytecodealliance/wit-bindgen) repos.  Feel free to experiment with this, but don't use it for anything serious!**
+
 ### Background
 
 As of this writing, the Component Model does not support concurrent, composable execution.  Although WASI 0.2 includes support for asynchronous I/O via the `wasi:io/poll` interface, it does not compose well: only one component in a composition can block at a time.  A major goal for WASI 0.3 is to provide built-in support for "composable async" in the Component Model, thereby resolving the tension between composition and concurrency.
